@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -60,6 +61,66 @@ void Application::initWindow ()
   glfwSetFramebufferSizeCallback(window, [](GLFWwindow *w, int, int) {
     ((Application*)glfwGetWindowUserPointer(w))->framebufferResized = true;
   });
+  glfwSetKeyCallback(window, [](GLFWwindow *w, int key, int /*scancode*/, int action, int mods) {
+    if (action == GLFW_PRESS)
+      { ((Application*)glfwGetWindowUserPointer(w))->keys.process(key, mods); }
+  });
+
+  // Left-click drag: orbit camera
+  glfwSetMouseButtonCallback(window, [](GLFWwindow *w, int button, int action, int /*mods*/) {
+    if (button != GLFW_MOUSE_BUTTON_LEFT) { return; }
+    auto *app = (Application*)glfwGetWindowUserPointer(w);
+    app->mouseDown = (action == GLFW_PRESS);
+    if (app->mouseDown)
+    {
+      // Disable cursor for unlimited drag range (no edge clamping)
+      glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+      glfwGetCursorPos(w, &app->lastMouseX, &app->lastMouseY);
+    }
+    else { glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_NORMAL); }
+  });
+
+  glfwSetCursorPosCallback(window, [](GLFWwindow *w, double x, double y) {
+    auto *app = (Application*)glfwGetWindowUserPointer(w);
+    if (!app->mouseDown) { return; }
+    float dx = (float)(x - app->lastMouseX);
+    float dy = (float)(y - app->lastMouseY);
+    app->lastMouseX = x;
+    app->lastMouseY = y;
+    // Horizontal drag → orbit around world Z (ground-parallel, no roll)
+    // Vertical drag   → change elevation; dy sign flipped so drag-down = look-down
+    float minPhi = glm::asin(glm::clamp(0.4f / app->camDist, -1.0f, 1.0f));
+    app->camTheta -= dx * 0.005f;
+    app->camPhi    = glm::clamp(app->camPhi + dy * 0.005f, minPhi, 1.4f);
+  });
+
+  // Scroll: zoom in/out (10 % per notch)
+  glfwSetScrollCallback(window, [](GLFWwindow *w, double /*dx*/, double dy) {
+    auto *app    = (Application*)glfwGetWindowUserPointer(w);
+    app->camDist = glm::clamp(app->camDist * (1.0f - (float)dy * 0.1f), 0.5f, 20.0f);
+    // Re-clamp phi in case the new distance puts the camera below the ground
+    float minPhi = glm::asin(glm::clamp(0.4f / app->camDist, -1.0f, 1.0f));
+    app->camPhi  = glm::max(app->camPhi, minPhi);
+  });
+}
+
+// ------ Key Bindings ------
+
+void Application::setupKeyBindings ()
+{
+  keys.bind(GLFW_KEY_Q,      GLFW_MOD_CONTROL, "Ctrl+Q    Quit",
+            [this]() { glfwSetWindowShouldClose(window, GLFW_TRUE); });
+  keys.bind(GLFW_KEY_ESCAPE, 0,                "Escape    Quit",
+            [this]() { glfwSetWindowShouldClose(window, GLFW_TRUE); });
+  keys.bind(GLFW_KEY_D,      GLFW_MOD_ALT,     "Alt+D     Toggle debug overlay (FPS)",
+            [this]() {
+              debugMode = !debugMode;
+              if (!debugMode) { glfwSetWindowTitle(window, "Vulkan Cube (RT)"); }
+            });
+  keys.bind(GLFW_KEY_F1,     0,                "F1        Show key bindings",
+            [this]() { keys.printHelp(); });
+
+  keys.printHelp();  // print on startup so the user knows what's available
 }
 
 // ------ Instance ------
@@ -1038,7 +1099,10 @@ void Application::updateUBO (uint32_t fi)
 
   UBO ubo;
   ubo.model = glm::rotate(glm::mat4(1.0f), t * glm::radians(90.0f), glm::vec3(0.5f, 1.0f, 0.0f));
-  ubo.view  = glm::lookAt(glm::vec3(2, 2, 2), glm::vec3(0, 0, 0), glm::vec3(0, 0, 1));
+  glm::vec3 camPos = { camDist * glm::cos(camPhi) * glm::cos(camTheta),
+                       camDist * glm::cos(camPhi) * glm::sin(camTheta),
+                       camDist * glm::sin(camPhi) };
+  ubo.view  = glm::lookAt(camPos, glm::vec3(0, 0, 0), glm::vec3(0, 0, 1));
   ubo.proj  = glm::perspective(glm::radians(45.0f), (float)scExtent.width / scExtent.height, 0.1f, 10.0f);
   ubo.proj[1][1] *= -1;
   memcpy(uboMapped[fi], &ubo, sizeof(ubo));
@@ -1091,6 +1155,27 @@ void Application::drawFrame ()
   else if (res != VK_SUCCESS) { throw std::runtime_error("vkQueuePresentKHR failed"); }
 
   frame = (frame + 1) % MAX_FRAMES;
+
+  // FPS tracking — update window title every second when debug overlay is on
+  static auto   fpsStart      = std::chrono::high_resolution_clock::now();
+  static uint32_t fpsFrameCount = 0;
+  fpsFrameCount++;
+  float elapsed = std::chrono::duration<float>(
+    std::chrono::high_resolution_clock::now() - fpsStart).count();
+  if (elapsed >= 1.0f)
+  {
+    fps           = fpsFrameCount / elapsed;
+    fpsFrameCount = 0;
+    fpsStart      = std::chrono::high_resolution_clock::now();
+    if (debugMode)
+    {
+      char title[128];
+      std::snprintf(title, sizeof(title),
+                    "Vulkan Cube (RT) | FPS: %.1f | Frame: %.2f ms",
+                    fps, 1000.0f / fps);
+      glfwSetWindowTitle(window, title);
+    }
+  }
 }
 
 // ------ Init / Main Loop / Cleanup ------
@@ -1119,6 +1204,7 @@ void Application::initVulkan ()
   createDescriptorSets();
   createCommandBuffers();
   createSyncObjects();
+  setupKeyBindings();
 }
 
 void Application::mainLoop ()

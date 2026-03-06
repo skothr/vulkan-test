@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
+#include "KeyBindings.hpp"
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
@@ -29,8 +30,19 @@ public:
   void run () { initWindow(); initVulkan(); mainLoop(); cleanup(); }
 
 private:
-  GLFWwindow *window = nullptr;
-  bool        framebufferResized = false;
+  GLFWwindow  *window = nullptr;
+  bool         framebufferResized = false;
+
+  KeyBindings  keys;
+  bool         debugMode = false;
+  float        fps       = 0.0f;
+
+  // Camera — spherical coordinates (Z-up)
+  float  camTheta   =  0.785f;   // azimuthal angle (radians, around Z axis)
+  float  camPhi     =  0.615f;   // elevation angle (radians, from XY plane)
+  float  camDist    =  3.46f;    // distance from origin  (≈ length of (2,2,2))
+  bool   mouseDown  = false;
+  double lastMouseX = 0.0, lastMouseY = 0.0;
 
   VkInstance               instance;
   VkSurfaceKHR             surface;
@@ -96,6 +108,7 @@ private:
   PFN_vkCmdTraceRaysKHR                         pfnCmdTraceRays       = nullptr;
 
   void initWindow ();
+  void setupKeyBindings ();
 
   void createInstance ();
 
