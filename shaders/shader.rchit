@@ -8,8 +8,15 @@ layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
 layout(set = 0, binding = 3) readonly buffer VertexBuf { float data[]; } verts;
 layout(set = 0, binding = 4) readonly buffer IndexBuf  { uint  data[]; } inds;
 
-const int   MAX_DEPTH = 4;
-const float IOR       = 1.5;  // glass index of refraction
+layout(push_constant) uniform PC
+{
+  float ior;
+  float tintAmount;
+  int   maxDepth;
+  float sunAzimuth;
+  float sunElevation;
+  float sunIntensity;
+} pc;
 
 uint getIdx (uint i)
 {
@@ -20,7 +27,7 @@ uint getIdx (uint i)
 void main ()
 {
   // Bail out at recursion limit
-  if (int(prd.w) >= MAX_DEPTH) { prd.rgb = vec3(0.0); return; }
+  if (int(prd.w) >= pc.maxDepth) { prd.rgb = vec3(0.0); return; }
 
   uint i0 = getIdx(uint(gl_PrimitiveID) * 3u + 0u);
   uint i1 = getIdx(uint(gl_PrimitiveID) * 3u + 1u);
@@ -39,7 +46,7 @@ void main ()
   vec3 c0   = vec3(verts.data[i0*6u+3u], verts.data[i0*6u+4u], verts.data[i0*6u+5u]);
   vec3 c1   = vec3(verts.data[i1*6u+3u], verts.data[i1*6u+4u], verts.data[i1*6u+5u]);
   vec3 c2   = vec3(verts.data[i2*6u+3u], verts.data[i2*6u+4u], verts.data[i2*6u+5u]);
-  vec3 tint = mix(vec3(1.0), bary.x*c0 + bary.y*c1 + bary.z*c2, 0.25);
+  vec3 tint = mix(vec3(1.0), bary.x*c0 + bary.y*c1 + bary.z*c2, pc.tintAmount);
 
   vec3  hitPos = gl_WorldRayOriginEXT + gl_HitTEXT * gl_WorldRayDirectionEXT;
   vec3  rayDir = normalize(gl_WorldRayDirectionEXT);
@@ -47,11 +54,11 @@ void main ()
   // N always faces toward the incoming ray; eta = IOR ratio at the interface
   bool  entering = dot(rayDir, worldNormal) < 0.0;
   vec3  N        = entering ? worldNormal : -worldNormal;
-  float eta      = entering ? (1.0 / IOR) : IOR;
+  float eta      = entering ? (1.0 / pc.ior) : pc.ior;
 
   // Schlick Fresnel approximation
   float cosI    = clamp(dot(-rayDir, N), 0.0, 1.0);
-  float r0      = (1.0 - IOR) / (1.0 + IOR);
+  float r0      = (1.0 - pc.ior) / (1.0 + pc.ior);
   r0            = r0 * r0;
   float fresnel = r0 + (1.0 - r0) * pow(1.0 - cosI, 5.0);
 

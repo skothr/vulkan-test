@@ -1,10 +1,12 @@
 CXX      = g++
 CXXFLAGS = -std=c++17 -O2
-LDFLAGS  = -lvulkan -lglfw -ldl -lpthread
+LDFLAGS  = -lvulkan -lglfw -ldl -lpthread -limgui -lstb
 
 TARGET   = vulkan-cube
-SRCS     = src/main.cpp src/Application.cpp
-INCLUDES = -Iinclude
+SRCS     = src/main.cpp src/Application.cpp src/ControlPanel.cpp \
+           lib/imgui-backends/imgui_impl_glfw.cpp \
+           lib/imgui-backends/imgui_impl_vulkan.cpp
+INCLUDES = -Iinclude -I/usr/include/imgui -I/usr/include/imgui/backends
 
 SHADER_DIR = shaders
 SPV_DIR    = shaders/compiled

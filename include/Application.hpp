@@ -3,6 +3,8 @@
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
 #include "KeyBindings.hpp"
+#include "Settings.hpp"
+#include "ControlPanel.hpp"
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
@@ -33,9 +35,11 @@ private:
   GLFWwindow  *window = nullptr;
   bool         framebufferResized = false;
 
+  Settings     settings;
+  ControlPanel controlPanel { settings };
+
   KeyBindings  keys;
-  bool         debugMode = false;
-  float        fps       = 0.0f;
+  float        fps = 0.0f;
 
   // Camera — spherical coordinates (Z-up)
   float  camTheta   =  0.785f;   // azimuthal angle (radians, around Z axis)
@@ -56,6 +60,7 @@ private:
   VkFormat                 scFormat;
   VkExtent2D               scExtent;
   std::vector<VkImageView> scViews;
+  uint32_t                 scMinImageCount = 2;
 
   // Ray tracing output image
   VkImage        storageImg  = VK_NULL_HANDLE;

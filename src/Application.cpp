@@ -62,14 +62,16 @@ void Application::initWindow ()
     ((Application*)glfwGetWindowUserPointer(w))->framebufferResized = true;
   });
   glfwSetKeyCallback(window, [](GLFWwindow *w, int key, int /*scancode*/, int action, int mods) {
-    if (action == GLFW_PRESS)
-      { ((Application*)glfwGetWindowUserPointer(w))->keys.process(key, mods); }
+    auto *app = (Application*)glfwGetWindowUserPointer(w);
+    if (action == GLFW_PRESS && !app->controlPanel.wantsKeyboard())
+      { app->keys.process(key, mods); }
   });
 
   // Left-click drag: orbit camera
   glfwSetMouseButtonCallback(window, [](GLFWwindow *w, int button, int action, int /*mods*/) {
     if (button != GLFW_MOUSE_BUTTON_LEFT) { return; }
     auto *app = (Application*)glfwGetWindowUserPointer(w);
+    if (app->controlPanel.wantsMouse()) { return; }
     app->mouseDown = (action == GLFW_PRESS);
     if (app->mouseDown)
     {
@@ -90,14 +92,15 @@ void Application::initWindow ()
     // Horizontal drag → orbit around world Z (ground-parallel, no roll)
     // Vertical drag   → change elevation; dy sign flipped so drag-down = look-down
     float minPhi = glm::asin(glm::clamp(0.4f / app->camDist, -1.0f, 1.0f));
-    app->camTheta -= dx * 0.005f;
-    app->camPhi    = glm::clamp(app->camPhi + dy * 0.005f, minPhi, 1.4f);
+    app->camTheta -= dx * app->settings.sensitivity;
+    app->camPhi    = glm::clamp(app->camPhi + dy * app->settings.sensitivity, minPhi, 1.4f);
   });
 
   // Scroll: zoom in/out (10 % per notch)
   glfwSetScrollCallback(window, [](GLFWwindow *w, double /*dx*/, double dy) {
     auto *app    = (Application*)glfwGetWindowUserPointer(w);
-    app->camDist = glm::clamp(app->camDist * (1.0f - (float)dy * 0.1f), 0.5f, 20.0f);
+    if (app->controlPanel.wantsMouse()) { return; }
+    app->camDist = glm::clamp(app->camDist * (1.0f - (float)dy * app->settings.zoomSpeed), 0.5f, 20.0f);
     // Re-clamp phi in case the new distance puts the camera below the ground
     float minPhi = glm::asin(glm::clamp(0.4f / app->camDist, -1.0f, 1.0f));
     app->camPhi  = glm::max(app->camPhi, minPhi);
@@ -112,11 +115,8 @@ void Application::setupKeyBindings ()
             [this]() { glfwSetWindowShouldClose(window, GLFW_TRUE); });
   keys.bind(GLFW_KEY_ESCAPE, 0,                "Escape    Quit",
             [this]() { glfwSetWindowShouldClose(window, GLFW_TRUE); });
-  keys.bind(GLFW_KEY_D,      GLFW_MOD_ALT,     "Alt+D     Toggle debug overlay (FPS)",
-            [this]() {
-              debugMode = !debugMode;
-              if (!debugMode) { glfwSetWindowTitle(window, "Vulkan Cube (RT)"); }
-            });
+  keys.bind(GLFW_KEY_D,      GLFW_MOD_ALT,     "Alt+D     Cycle debug overlay (off / FPS / verbose)",
+            [this]() { settings.debugLevel = (settings.debugLevel + 1) % 3; });
   keys.bind(GLFW_KEY_F1,     0,                "F1        Show key bindings",
             [this]() { keys.printHelp(); });
 
@@ -277,6 +277,7 @@ void Application::createSwapchain ()
   auto fmt  = chooseSurfaceFormat();
   auto mode = choosePresentMode();
   auto ext  = chooseExtent(caps);
+  scMinImageCount = caps.minImageCount;
   uint32_t imgCnt = caps.minImageCount + 1;
   if (caps.maxImageCount > 0) { imgCnt = std::min(imgCnt, caps.maxImageCount); }
 
@@ -489,18 +490,32 @@ void Application::createRTPipeline ()
   groups[2].anyHitShader       = VK_SHADER_UNUSED_KHR;
   groups[2].intersectionShader = VK_SHADER_UNUSED_KHR;
 
+  VkPushConstantRange pcRange {};
+  pcRange.stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
+  pcRange.offset     = 0;
+  pcRange.size       = sizeof(PushConsts);
+
   VkPipelineLayoutCreateInfo pli { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-  pli.setLayoutCount = 1;
-  pli.pSetLayouts    = &descLayout;
+  pli.setLayoutCount         = 1;
+  pli.pSetLayouts            = &descLayout;
+  pli.pushConstantRangeCount = 1;
+  pli.pPushConstantRanges    = &pcRange;
   if (vkCreatePipelineLayout(dev, &pli, nullptr, &pipeLayout) != VK_SUCCESS)
     { throw std::runtime_error("vkCreatePipelineLayout failed"); }
+
+  // Query device limit so the slider in the UI can go up to that value safely
+  VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtProps {
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR };
+  VkPhysicalDeviceProperties2 props2 { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+  props2.pNext = &rtProps;
+  vkGetPhysicalDeviceProperties2(physDev, &props2);
 
   VkRayTracingPipelineCreateInfoKHR ci { VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR };
   ci.stageCount                   = 3;
   ci.pStages                      = stages;
   ci.groupCount                   = 3;
   ci.pGroups                      = groups;
-  ci.maxPipelineRayRecursionDepth = 4;
+  ci.maxPipelineRayRecursionDepth = rtProps.maxRayRecursionDepth;
   ci.layout                       = pipeLayout;
   if (pfnCreateRTPipelines(dev, VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline) != VK_SUCCESS)
     { throw std::runtime_error("vkCreateRayTracingPipelinesKHR failed"); }
@@ -1000,6 +1015,10 @@ void Application::recordCommandBuffer (VkCommandBuffer cb, uint32_t imgIdx)
   vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
   vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeLayout,
                           0, 1, &descSets[frame], 0, nullptr);
+  auto pc = settings.toPushConsts();
+  vkCmdPushConstants(cb, pipeLayout,
+                     VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR,
+                     0, sizeof(pc), &pc);
   pfnCmdTraceRays(cb, &sbtRgen, &sbtMiss, &sbtHit, &sbtCall,
                   scExtent.width, scExtent.height, 1);
 
@@ -1036,17 +1055,20 @@ void Application::recordCommandBuffer (VkCommandBuffer cb, uint32_t imgIdx)
     scImages[imgIdx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
     1, &blit, VK_FILTER_NEAREST);
 
-  // --- Transition swapchain: TRANSFER_DST -> PRESENT_SRC ---
-  VkImageMemoryBarrier toPresent { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-  toPresent.srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT;
-  toPresent.dstAccessMask    = 0;
-  toPresent.oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  toPresent.newLayout        = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-  toPresent.image            = scImages[imgIdx];
-  toPresent.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+  // --- Transition swapchain: TRANSFER_DST -> COLOR_ATTACHMENT_OPTIMAL (for ImGui pass) ---
+  VkImageMemoryBarrier toColorAtt { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+  toColorAtt.srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT;
+  toColorAtt.dstAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  toColorAtt.oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  toColorAtt.newLayout        = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  toColorAtt.image            = scImages[imgIdx];
+  toColorAtt.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
   vkCmdPipelineBarrier(cb,
-    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-    0, 0, nullptr, 0, nullptr, 1, &toPresent);
+    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+    0, 0, nullptr, 0, nullptr, 1, &toColorAtt);
+
+  // --- ImGui render pass (overlays UI, transitions swapchain -> PRESENT_SRC_KHR) ---
+  controlPanel.record(cb, imgIdx, scExtent);
 
   if (vkEndCommandBuffer(cb) != VK_SUCCESS)
     { throw std::runtime_error("vkEndCommandBuffer failed"); }
@@ -1088,6 +1110,7 @@ void Application::recreateSwapchain ()
   cleanupSwapchain();
   createSwapchain(); createImageViews(); createStorageImage();
   updateStorageImageDescriptor();
+  controlPanel.onSwapchainRecreate(dev, scFormat, scViews, scExtent);
 }
 
 // ------ UBO Update ------
@@ -1098,7 +1121,9 @@ void Application::updateUBO (uint32_t fi)
   float t = std::chrono::duration<float>(std::chrono::high_resolution_clock::now() - start).count();
 
   UBO ubo;
-  ubo.model = glm::rotate(glm::mat4(1.0f), t * glm::radians(90.0f), glm::vec3(0.5f, 1.0f, 0.0f));
+  ubo.model = settings.autoRotate
+    ? glm::rotate(glm::mat4(1.0f), t * glm::radians(90.0f) * settings.rotSpeed, glm::vec3(0.5f, 1.0f, 0.0f))
+    : glm::mat4(1.0f);
   glm::vec3 camPos = { camDist * glm::cos(camPhi) * glm::cos(camTheta),
                        camDist * glm::cos(camPhi) * glm::sin(camTheta),
                        camDist * glm::sin(camPhi) };
@@ -1127,6 +1152,8 @@ void Application::drawFrame ()
     { throw std::runtime_error("vkAcquireNextImageKHR failed"); }
 
   updateUBO(frame);
+  controlPanel.beginFrame();
+  controlPanel.draw({ fps, camTheta, camPhi, camDist });
   vkResetFences(dev, 1, &inFlight[frame]);
   vkResetCommandBuffer(cmdBufs[frame], 0);
   recordCommandBuffer(cmdBufs[frame], imgIdx);
@@ -1167,14 +1194,6 @@ void Application::drawFrame ()
     fps           = fpsFrameCount / elapsed;
     fpsFrameCount = 0;
     fpsStart      = std::chrono::high_resolution_clock::now();
-    if (debugMode)
-    {
-      char title[128];
-      std::snprintf(title, sizeof(title),
-                    "Vulkan Cube (RT) | FPS: %.1f | Frame: %.2f ms",
-                    fps, 1000.0f / fps);
-      glfwSetWindowTitle(window, title);
-    }
   }
 }
 
@@ -1204,6 +1223,9 @@ void Application::initVulkan ()
   createDescriptorSets();
   createCommandBuffers();
   createSyncObjects();
+  controlPanel.init(window, instance, physDev, dev,
+                    qf.graphics, graphicsQ, cmdPool,
+                    scFormat, scViews, scExtent, scMinImageCount);
   setupKeyBindings();
 }
 
@@ -1215,6 +1237,7 @@ void Application::mainLoop ()
 
 void Application::cleanup ()
 {
+  controlPanel.cleanup(dev);
   cleanupSwapchain();
   for (int i = 0; i < MAX_FRAMES; i++)
   {
