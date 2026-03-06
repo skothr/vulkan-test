@@ -3,7 +3,8 @@ CXXFLAGS = -std=c++17 -O2
 LDFLAGS  = -lvulkan -lglfw -ldl -lpthread
 
 TARGET   = vulkan-cube
-SRCS     = src/main.cpp
+SRCS     = src/main.cpp src/Application.cpp
+INCLUDES = -Iinclude
 
 SHADER_DIR = shaders
 SPV_DIR    = shaders/compiled
@@ -26,7 +27,7 @@ $(FRAG_SPV): $(SHADER_DIR)/shader.frag
 	glslangValidator -V $< -o $@
 
 $(TARGET): $(SRCS)
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $^ $(LDFLAGS)
 
 run: all
 	./$(TARGET)

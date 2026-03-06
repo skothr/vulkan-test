@@ -30,9 +30,17 @@ glslc shaders/shader.frag -o shaders/compiled/shader.frag.spv
 The Makefile should compile `.cu` files with `nvcc` and `.cpp` files with `g++`, linking against `-lvulkan -lglfw -ldl -lpthread`.
 
 
-## Conventions
+## C++ Style Conventions
 - GNU style spacing
 - Keep code on the same line when logical and practical (prefer horizontal space)
+ - Use spaces to align equal signs, parentheses, and braces between lines where it makes sense.
+- Always put spaces around and inside curly braces. E.g. A a { x, y };
+- Always put block curly braces on a new line (e.g. for if, for, while, struct, class definitions), unless it's a one-liner.
+- Always use curly braces even on one liners.
+- Two-liners should have curly braces around the second line instead of separate lines.
+
+  
+## Other Conventions
 - Vulkan objects follow init/create → use → destroy lifecycle; clean up in reverse order
 - UBO layout: `model`, `view`, `proj` matrices (binding = 0)
 
