@@ -8,23 +8,27 @@ INCLUDES = -Iinclude
 
 SHADER_DIR = shaders
 SPV_DIR    = shaders/compiled
-VERT_SPV   = $(SPV_DIR)/shader.vert.spv
-FRAG_SPV   = $(SPV_DIR)/shader.frag.spv
+RGEN_SPV   = $(SPV_DIR)/shader.rgen.spv
+RMISS_SPV  = $(SPV_DIR)/shader.rmiss.spv
+RCHIT_SPV  = $(SPV_DIR)/shader.rchit.spv
 
 .PHONY: all run clean shaders
 
 all: shaders $(TARGET)
 
-shaders: $(SPV_DIR) $(VERT_SPV) $(FRAG_SPV)
+shaders: $(SPV_DIR) $(RGEN_SPV) $(RMISS_SPV) $(RCHIT_SPV)
 
 $(SPV_DIR):
 	mkdir -p $(SPV_DIR)
 
-$(VERT_SPV): $(SHADER_DIR)/shader.vert
-	glslangValidator -V $< -o $@
+$(RGEN_SPV): $(SHADER_DIR)/shader.rgen
+	glslangValidator -V --target-env vulkan1.2 $< -o $@
 
-$(FRAG_SPV): $(SHADER_DIR)/shader.frag
-	glslangValidator -V $< -o $@
+$(RMISS_SPV): $(SHADER_DIR)/shader.rmiss
+	glslangValidator -V --target-env vulkan1.2 $< -o $@
+
+$(RCHIT_SPV): $(SHADER_DIR)/shader.rchit
+	glslangValidator -V --target-env vulkan1.2 $< -o $@
 
 $(TARGET): $(SRCS)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $^ $(LDFLAGS)
@@ -33,4 +37,4 @@ run: all
 	./$(TARGET)
 
 clean:
-	rm -f $(TARGET) $(VERT_SPV) $(FRAG_SPV)
+	rm -f $(TARGET) $(RGEN_SPV) $(RMISS_SPV) $(RCHIT_SPV)

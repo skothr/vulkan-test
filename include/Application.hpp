@@ -15,15 +15,7 @@
 const uint32_t WIDTH = 800, HEIGHT = 600;
 const int      MAX_FRAMES = 2;
 
-struct Vertex
-{
-  glm::vec3 pos, color;
-  static VkVertexInputBindingDescription binding ()
-  { return { 0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX }; }
-  static std::array<VkVertexInputAttributeDescription, 2> attribs ()
-  { return { { { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos) },
-               { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color) } } }; }
-};
+struct Vertex { glm::vec3 pos, color; };
 
 struct UBO { glm::mat4 model, view, proj; };
 
@@ -53,15 +45,14 @@ private:
   VkExtent2D               scExtent;
   std::vector<VkImageView> scViews;
 
-  VkImage        depthImage;
-  VkDeviceMemory depthMem;
-  VkImageView    depthView;
+  // Ray tracing output image
+  VkImage        storageImg  = VK_NULL_HANDLE;
+  VkDeviceMemory storageMem  = VK_NULL_HANDLE;
+  VkImageView    storageView = VK_NULL_HANDLE;
 
-  VkRenderPass             renderPass;
   VkDescriptorSetLayout    descLayout;
   VkPipelineLayout         pipeLayout;
   VkPipeline               pipeline;
-  std::vector<VkFramebuffer> framebuffers;
 
   VkCommandPool                cmdPool;
   std::vector<VkCommandBuffer> cmdBufs;
@@ -80,6 +71,30 @@ private:
   std::vector<VkFence>     inFlight;
   uint32_t frame = 0;
 
+  // Acceleration structures
+  VkAccelerationStructureKHR blas = VK_NULL_HANDLE;
+  VkBuffer       blasBuf; VkDeviceMemory blasMem;
+
+  VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
+  VkBuffer       tlasBuf; VkDeviceMemory tlasMem;
+  VkBuffer       instanceBuf; VkDeviceMemory instanceMem; void *instanceMapped;
+  VkBuffer       tlasScratchBuf; VkDeviceMemory tlasScratchMem;
+
+  // Shader binding table
+  VkBuffer       sbtBuf; VkDeviceMemory sbtMem;
+  VkStridedDeviceAddressRegionKHR sbtRgen {}, sbtMiss {}, sbtHit {}, sbtCall {};
+
+  // RT function pointers (loaded at runtime)
+  PFN_vkGetBufferDeviceAddressKHR                pfnGetBufferAddress   = nullptr;
+  PFN_vkCreateAccelerationStructureKHR           pfnCreateAS           = nullptr;
+  PFN_vkDestroyAccelerationStructureKHR          pfnDestroyAS          = nullptr;
+  PFN_vkGetAccelerationStructureBuildSizesKHR    pfnGetASBuildSizes    = nullptr;
+  PFN_vkCmdBuildAccelerationStructuresKHR        pfnCmdBuildAS         = nullptr;
+  PFN_vkGetAccelerationStructureDeviceAddressKHR pfnGetASDeviceAddress = nullptr;
+  PFN_vkCreateRayTracingPipelinesKHR             pfnCreateRTPipelines  = nullptr;
+  PFN_vkGetRayTracingShaderGroupHandlesKHR       pfnGetRTGroupHandles  = nullptr;
+  PFN_vkCmdTraceRaysKHR                         pfnCmdTraceRays       = nullptr;
+
   void initWindow ();
 
   void createInstance ();
@@ -89,6 +104,7 @@ private:
   void pickPhysicalDevice ();
 
   void createLogicalDevice ();
+  void loadRTFunctions ();
 
   VkSurfaceFormatKHR chooseSurfaceFormat ();
   VkPresentModeKHR   choosePresentMode ();
@@ -103,26 +119,30 @@ private:
                     VkImageUsageFlags usage, VkMemoryPropertyFlags memProps,
                     VkImage &img, VkDeviceMemory &mem);
 
-  VkFormat findDepthFormat ();
-  void createDepthResources ();
+  void createStorageImage ();
 
-  void createRenderPass ();
   void createDescriptorSetLayout ();
 
   VkShaderModule createShaderModule (const std::vector<char> &code);
-  void createGraphicsPipeline ();
-
-  void createFramebuffers ();
+  void createRTPipeline ();
 
   void createBuffer (VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props,
-                     VkBuffer &buf, VkDeviceMemory &mem);
+                     VkBuffer &buf, VkDeviceMemory &mem, bool deviceAddr = false);
+  VkCommandBuffer beginOneTimeCmd ();
+  void endOneTimeCmd (VkCommandBuffer cb);
   void copyBuffer (VkBuffer src, VkBuffer dst, VkDeviceSize size);
   void createVertexBuffer ();
   void createIndexBuffer ();
   void createUniformBuffers ();
 
+  VkDeviceAddress getBufferAddress (VkBuffer buf);
+  void createBLAS ();
+  void createTLAS ();
+  void createSBT ();
+
   void createDescriptorPool ();
   void createDescriptorSets ();
+  void updateStorageImageDescriptor ();
 
   void createCommandPool ();
   void createCommandBuffers ();

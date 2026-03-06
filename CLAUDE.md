@@ -30,6 +30,15 @@ glslc shaders/shader.frag -o shaders/compiled/shader.frag.spv
 The Makefile should compile `.cu` files with `nvcc` and `.cpp` files with `g++`, linking against `-lvulkan -lglfw -ldl -lpthread`.
 
 
+## General Code Conventions
+- Structure functionality into relevant classes, utilizing modern OOP practices.
+- Each class should have its own header and source file called the class name in camel case.
+  - Utility classes and structs can be grouped into their utility files.
+  - Supporting classes and structs can be defined in a class's files.
+- Group files that logically go together into matching subdirectories where it makes sense.
+  - Consider if parts of the code should be compiled as utility libraries for potential reusability.
+  
+
 ## C++ Style Conventions
 - GNU style spacing
 - Keep code on the same line when logical and practical (prefer horizontal space)

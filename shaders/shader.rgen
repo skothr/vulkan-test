@@ -1,0 +1,29 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
+layout(set = 0, binding = 1, rgba8) uniform image2D outImage;
+layout(set = 0, binding = 2) uniform UBO { mat4 model, view, proj; } ubo;
+
+// Payload: .rgb = color, .w = recursion depth
+layout(location = 0) rayPayloadEXT vec4 prd;
+
+void main ()
+{
+  vec2 uv  = (vec2(gl_LaunchIDEXT.xy) + 0.5) / vec2(gl_LaunchSizeEXT.xy);
+  vec2 ndc = uv * 2.0 - 1.0;
+
+  mat4 invV = inverse(ubo.view);
+  mat4 invP = inverse(ubo.proj);
+
+  vec4 origin    = invV * vec4(0, 0, 0, 1);
+  vec4 target    = invP * vec4(ndc.x, ndc.y, 1.0, 1.0);
+  vec4 direction = invV * vec4(normalize(target.xyz / target.w), 0.0);
+
+  prd = vec4(0.0, 0.0, 0.0, 0.0);  // .w = depth 0
+  traceRayEXT(tlas, gl_RayFlagsOpaqueEXT, 0xFF,
+              0, 0, 0,
+              origin.xyz, 0.001, direction.xyz, 1000.0,
+              0);
+  imageStore(outImage, ivec2(gl_LaunchIDEXT.xy), vec4(prd.rgb, 1.0));
+}
