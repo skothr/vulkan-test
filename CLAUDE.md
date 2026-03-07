@@ -1,18 +1,24 @@
 # CLAUDE.md
 
+Keep this file up to date. When making changes that affect the stack, structure, build process,
+architecture, or conventions described here, update the relevant section before finishing the task.
+
 ## Stack
-- C++ compiled with gcc using Makefile
-- Vulkan for graphics
-- CUDA for compute
+- C++ compiled with g++ using Makefile
+- Vulkan for graphics (ray tracing pipeline)
 - GLFW for window management
+- Dear ImGui for UI panels and popups
+- GLM for math (vectors, matrices)
+- stb_image_write for PNG output
+- CUDA for compute (future)
 
 ## Structure
 - `./src/` — C++ source files (`.cpp`)
 - `./src/cuda/` — CUDA source files (`.cu`)
 - `./include/` — header files
 - `./lib/` — external dependencies
-- `./shaders/` — GLSL shaders (`.vert`, `.frag`, etc.)
-- `./shaders/compiled/` — compiled SPIR-V shaders (output of `glslc`)
+- `./shaders/` — GLSL ray tracing shaders
+- `./shaders/compiled/` — compiled SPIR-V shaders
 
 ## Build Commands
 ```bash
@@ -23,54 +29,71 @@ make clean    # clean build artifacts
 
 Shader compilation (SPIR-V):
 ```bash
-glslc shaders/shader.vert -o shaders/compiled/shader.vert.spv
-glslc shaders/shader.frag -o shaders/compiled/shader.frag.spv
+glslangValidator -V --target-env vulkan1.2 shaders/shader.rgen -o shaders/compiled/shader.rgen.spv
+# (same pattern for .rmiss, .rchit, .rint)
 ```
 
-The Makefile should compile `.cu` files with `nvcc` and `.cpp` files with `g++`, linking against `-lvulkan -lglfw -ldl -lpthread`.
-
-  
-## General Code Conventions
-- Structure functionality into relevant classes, utilizing modern OOP practices.
-- Each class should have its own header and source file called the class name in camel case.
-  - Utility classes and structs can be grouped into their utility files.
-  - Supporting classes and structs can be defined in a class's files.
-- Group files that logically go together into matching subdirectories where it makes sense.
-  - Consider if parts of the code should be compiled as utility libraries for potential reusability.
-- Implement code in the right file for its scope. E.g. code for whole application-level stuff should reside or hook into the Application class.
+The Makefile compiles `.cu` files with `nvcc` and `.cpp` files with `g++`, linking against
+`-lvulkan -lglfw -ldl -lpthread -limgui -lstb`.
 
 
-## Design Conventions
-- Whenever adding code that uses certain values or magic numbers that would be hard coded, prefer to add each as a user-configurable setting so everything configurable at runtime.
-  - Use sensical max/min values and defaults based on the context, considering usability, standard conventions, and handling any edge cases.
-  - Organize settings into appliocation-level groups for different tabs of the setting menu, and organize related settings into ordered subgroups for sub-tabs or sections.
-  - Keep related settings together and order them sensibly into hierarchies for optimal accessibility and human readability.
+## Code Conventions
 
-  
-## C++ Style Conventions
-- GNU style spacing
-  - Keep code on the same line when logical and practical (prefer horizontal space).
-    - Try to keep lines under 140 characters, prefer splitting up lines to going over.
-    - Use spaces to align equal signs, parentheses, braces, and members/arguments between lines where it makes sense.
-      - For aligning elements across lines, offset for prefixed operators or negative sign so start of variable/number is aligned. Number literals should align by decimal places or first digits.
-  - Always put spaces around and inside curly braces. E.g. A a { x, y };
-  - Always put block curly braces on a new line (e.g. for if, for, while, struct, class definitions), unless it's a one-liner.              
-  - Always use curly braces even on one liners.
-  - Two-liners should have curly braces around the second line instead of separate lines.
-- Use enums named descriptively in ALL_CAPS for type indices, error codes, statically defined options, etc. and use that enum type instead of just passing/checking ints.
-- Make code human-readable wherever possible!
-  - Short variable names are fine where purpose is clear/standard, or matches math/physics symbolic conventions when working with relvant equations.
-- Utilize C++ templates where possible to handle different types and define generic usage. E.g. A type-agnostic function that hooks an object of the given type or its member data into the proper Dear Imgui input function according to its data type.
+### Organization
+Think about where code logically belongs before writing it. Application should stay focused on
+top-level app structure: Vulkan init, the main loop, swapchain management, and wiring things
+together. Cohesive functionality with its own state and behavior — especially anything that
+would otherwise spread many related members and methods across a larger class — should be
+encapsulated in its own class.
 
-  
-## Other Conventions
-- Vulkan objects follow init/create → use → destroy lifecycle; clean up in reverse order
-- UBO layout: `model`, `view`, `proj` matrices (binding = 0)
+Each class has its own header and source file named after the class in camelCase. Utility or
+supporting types closely tied to one class can be defined alongside it.
+
+**Classes in this codebase:**
+- `Application` — top-level Vulkan setup, main loop, swapchain, ray tracing pipeline
+- `ControlPanel` — ImGui context, render pass, framebuffers, settings UI
+- `ScreenshotManager` — capture state, preview images, staging buffers, popups
+- `KeyBindings` — key→action map, GLFW dispatch
+- `Settings` — all runtime-editable parameters; `toParamsUBO()` packs them for the shader
+
+### Design
+- Prefer user-configurable settings over hard-coded values. Use sensible defaults, min/max
+  ranges, and handle edge cases. Keep related settings grouped and ordered logically.
+- Vulkan objects follow a strict create → use → destroy lifecycle; always clean up in reverse
+  creation order.
+- ImGui textures must be allocated from ImGui's own descriptor pool and layout (via
+  `ImGui_ImplVulkan_AddTexture`) to be pipeline-compatible as `ImTextureID`.
+
+### C++ Style
+- GNU style spacing. Prefer horizontal space; keep related code on one line when readable.
+  Keep lines under 140 characters; split rather than exceed.
+- Align `=`, parentheses, braces, and arguments across related lines where it aids readability.
+  When aligning across lines, offset for unary operators/signs so the value starts are aligned.
+- Always put spaces around and inside curly braces: `A a { x, y };`
+- Block curly braces go on a new line for `if`, `for`, `while`, `struct`, `class`, etc.,
+  unless the entire statement fits on one line.
+- Always use curly braces, even for one-liners. Two-liners use braces on the second line only:
+  ```cpp
+  if (condition)
+    { doSomething(); }
+  ```
+- Enum values are `ALL_CAPS`; enum type names are `PascalCase`. Use the enum type instead of
+  raw ints for any categorically distinct set of options or states.
+- Short variable names are fine where purpose is clear or matches math/physics conventions.
+- Name functions for what they do, not how: `saveScreenshot()` not `doSaveScreenshot()`.
+- Boolean accessors: use a clear descriptive name, or prefix with `is` if needed for clarity.
 
 
 ## Shader Architecture
-Current shaders (`shaders/shader.vert`, `shaders/shader.frag`) implement:
-- Vertex input: `location=0` vec3 position, `location=1` vec3 color
-- UBO at `binding=0`: model/view/proj MVP matrices
-- Output: per-vertex color passed to fragment shader
+Five ray tracing stages compiled to SPIR-V:
 
+| File                    | Stage        | Role                                          |
+|-------------------------|--------------|-----------------------------------------------|
+| `shader.rgen`           | Ray gen      | Fires primary camera rays; payload loc 0      |
+| `shader.rmiss`          | Miss [0]     | Floor/sky; fires shadow + caustic rays        |
+| `shader_shadow.rmiss`   | Miss [1]     | Sun-direction check or occlusion passthrough  |
+| `shader.rchit`          | Hit [0]      | Glass BSDF (reflect + refract)                |
+| `shader_shadow.rchit`   | Hit [1]      | Glass shadow/caustic transmittance            |
+| `shader.rint`           | Intersection | Analytic sphere (AABB BLAS, procedural hit)   |
+
+Descriptor set bindings: 0 = TLAS, 1 = storage image, 2 = UBO, 3 = ParamsUBO.

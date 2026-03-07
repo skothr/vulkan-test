@@ -5,6 +5,7 @@
 #include "KeyBindings.hpp"
 #include "Settings.hpp"
 #include "ControlPanel.hpp"
+#include "ScreenshotManager.hpp"
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
@@ -35,8 +36,9 @@ private:
   GLFWwindow  *window = nullptr;
   bool         framebufferResized = false;
 
-  Settings     settings;
-  ControlPanel controlPanel { settings };
+  Settings          settings;
+  ControlPanel      controlPanel { settings };
+  ScreenshotManager screenshotMgr;
 
   KeyBindings  keys;
   float        fps = 0.0f;

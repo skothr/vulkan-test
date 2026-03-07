@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 enum class SurfaceType { SPHERE = 0, CUBE = 1, SURFACE_4D = 2 };
 enum class DebugLevel  { OFF = 0, FPS = 1, VERBOSE = 2 };
 
@@ -157,6 +159,9 @@ struct Settings
   // ── UI ────────────────────────────────────────────────────────────────────
   bool showPanel = false;
   bool showDemo  = false;
+
+  // ── Capture ───────────────────────────────────────────────────────────────
+  std::string screenshotSuffix;   // optional suffix appended to screenshot filename
 
   // ── Debug overlay  (0 = off, 1 = fps, 2 = verbose) ───────────────────────
   DebugLevel debugLevel = DebugLevel::FPS;

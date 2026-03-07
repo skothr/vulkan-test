@@ -4,7 +4,7 @@
 // Implemented features:
 //  [X] Renderer: Support for large meshes (64k+ vertices) with 16-bit indices.
 // Missing features:
-//  [ ] Renderer: User texture binding. Changes of ImTextureID aren't supported by this backend! See https://github.com/ocornut/imgui/pull/914
+//  [X] Renderer: User texture binding. Pass a VkDescriptorSet as ImTextureID (see ImGui_ImplVulkan_AddTexture).
 
 // You can use unmodified imgui_impl_* files in your project. See examples/ folder for examples of using this.
 // Prefer including the entire imgui/ repository into your project (either as a copy or as a submodule), and only build the backends you need.
@@ -427,6 +427,7 @@ void ImGui_ImplVulkan_RenderDrawData(ImDrawData* draw_data, VkCommandBuffer comm
     if (fb_width <= 0 || fb_height <= 0)
         return;
 
+    ImGuiIO& io = ImGui::GetIO();
     ImGui_ImplVulkan_Data* bd = ImGui_ImplVulkan_GetBackendData();
     ImGui_ImplVulkan_InitInfo* v = &bd->VulkanInitInfo;
     if (pipeline == VK_NULL_HANDLE)
@@ -530,6 +531,17 @@ void ImGui_ImplVulkan_RenderDrawData(ImDrawData* draw_data, VkCommandBuffer comm
                 scissor.extent.width = (uint32_t)(clip_max.x - clip_min.x);
                 scissor.extent.height = (uint32_t)(clip_max.y - clip_min.y);
                 vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+
+                // Bind per-draw texture: use user-supplied descriptor set if TextureId is set
+                // and differs from the font atlas; otherwise keep the default font descriptor set.
+                {
+                    ImTextureID font_tex = io.Fonts->TexID;
+                    VkDescriptorSet ds = (pcmd->TextureId && pcmd->TextureId != font_tex)
+                        ? (VkDescriptorSet)(intptr_t)pcmd->TextureId
+                        : bd->DescriptorSet;
+                    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            bd->PipelineLayout, 0, 1, &ds, 0, NULL);
+                }
 
                 // Draw
                 vkCmdDrawIndexed(command_buffer, pcmd->ElemCount, 1, pcmd->IdxOffset + global_idx_offset, pcmd->VtxOffset + global_vtx_offset, 0);
@@ -1471,4 +1483,38 @@ void ImGui_ImplVulkanH_DestroyWindowRenderBuffers(VkDevice device, ImGui_ImplVul
     buffers->FrameRenderBuffers = NULL;
     buffers->Index = 0;
     buffers->Count = 0;
+}
+
+// Allocate a descriptor set from ImGui's internal pool + layout so it is
+// compatible with ImGui's pipeline (same immutable sampler baked in).
+// The sampler parameter is ignored because the layout uses an immutable sampler;
+// only imageView and imageLayout are used.
+VkDescriptorSet ImGui_ImplVulkan_AddTexture(VkSampler sampler, VkImageView image_view, VkImageLayout image_layout)
+{
+    ImGui_ImplVulkan_Data*     bd = ImGui_ImplVulkan_GetBackendData();
+    ImGui_ImplVulkan_InitInfo*  v = &bd->VulkanInitInfo;
+
+    VkDescriptorSet descriptor_set;
+    VkDescriptorSetAllocateInfo alloc_info = {};
+    alloc_info.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc_info.descriptorPool     = v->DescriptorPool;
+    alloc_info.descriptorSetCount = 1;
+    alloc_info.pSetLayouts        = &bd->DescriptorSetLayout;
+    VkResult err = vkAllocateDescriptorSets(v->Device, &alloc_info, &descriptor_set);
+    check_vk_result(err);
+
+    VkDescriptorImageInfo desc_image = {};
+    desc_image.sampler     = sampler;       // ignored — layout uses immutable sampler
+    desc_image.imageView   = image_view;
+    desc_image.imageLayout = image_layout;
+
+    VkWriteDescriptorSet write_desc = {};
+    write_desc.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write_desc.dstSet          = descriptor_set;
+    write_desc.descriptorCount = 1;
+    write_desc.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write_desc.pImageInfo      = &desc_image;
+    vkUpdateDescriptorSets(v->Device, 1, &write_desc, 0, nullptr);
+
+    return descriptor_set;
 }

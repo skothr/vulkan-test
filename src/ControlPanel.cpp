@@ -4,6 +4,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
+#include <cstring>
 #include <stdexcept>
 
 // ============================================================
@@ -111,6 +112,7 @@ void ControlPanel::init (GLFWwindow *win, VkInstance inst, VkPhysicalDevice phys
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGui::StyleColorsDark();
+  ImGui::GetStyle().Colors[ImGuiCol_ModalWindowDimBg] = { 0.0f, 0.0f, 0.0f, 0.0f };
   ImGuiIO &io    = ImGui::GetIO();
   io.IniFilename = nullptr;  // don't persist window layout
 
@@ -379,6 +381,23 @@ void ControlPanel::drawRenderingSection ()
   if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Ray-march steps through the 4D\nGaussian blobby AABB.\nMore = sharper surface, higher cost.\nCtrl+click to type a value above 128."); }
 }
 
+void ControlPanel::drawCaptureSection ()
+{
+  if (!ImGui::CollapsingHeader("Screenshot", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
+
+  ImGui::TextDisabled("Press F12 to capture — saved to ./images/");
+  ImGui::Spacing();
+
+  // Suffix input
+  char buf[256];
+  std::strncpy(buf, settings.screenshotSuffix.c_str(), sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = '\0';
+  ImGui::SetNextItemWidth(-1.0f);
+  if (ImGui::InputText("##suffix", buf, sizeof(buf)))
+    { settings.screenshotSuffix = buf; }
+  ImGui::TextDisabled("Optional suffix: screenshot_NNN_<suffix>.png");
+}
+
 void ControlPanel::beginFrame ()
 {
   ImGui_ImplVulkan_NewFrame();
@@ -420,8 +439,6 @@ void ControlPanel::drawDebugOverlay (const DebugInfo &dbg)
 
 void ControlPanel::draw (const DebugInfo &dbg)
 {
-  drawDebugOverlay(dbg);
-
   if (!settings.showPanel) { return; }
 
   // Settings panel — anchored to the upper-right on first appearance
@@ -429,36 +446,40 @@ void ControlPanel::draw (const DebugInfo &dbg)
   const float PAD_PANEL = 10.0f;
   const float WIN_W     = 370.0f;
   ImGui::SetNextWindowPos (ImVec2(io.DisplaySize.x - WIN_W - PAD_PANEL, PAD_PANEL), ImGuiCond_Appearing);
-  ImGui::SetNextWindowSize(ImVec2(WIN_W, 0.0f), ImGuiCond_Appearing);  // 0 height = auto-fit content
-  ImGui::SetNextWindowSizeConstraints(ImVec2(200.0f, 0.0f),
+  ImGui::SetNextWindowSize(ImVec2(WIN_W, io.DisplaySize.y - PAD_PANEL * 2.0f), ImGuiCond_Appearing);
+  ImGui::SetNextWindowSizeConstraints(ImVec2(200.0f, 100.0f),
                                       ImVec2(FLT_MAX, io.DisplaySize.y - PAD_PANEL * 2.0f));
-  ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoSavedSettings);
+  ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoSavedSettings |
+                                    ImGuiWindowFlags_NoScrollbar     |
+                                    ImGuiWindowFlags_NoScrollWithMouse);
 
+  // Tab bar — rendered before child so it stays fixed at the top
+  static int activeTab = 0;
   if (ImGui::BeginTabBar("##tabs"))
   {
-    if (ImGui::BeginTabItem("Scene"))
-    {
+    if (ImGui::BeginTabItem("Scene"))     { activeTab = 0; ImGui::EndTabItem(); }
+    if (ImGui::BeginTabItem("Rendering")) { activeTab = 1; ImGui::EndTabItem(); }
+    if (ImGui::BeginTabItem("Camera"))    { activeTab = 2; ImGui::EndTabItem(); }
+    ImGui::EndTabBar();
+  }
+
+  // Scrollable content — fills remaining window height
+  ImGui::BeginChild("##tabContent", ImVec2(0.0f, 0.0f), false);
+  switch (activeTab)
+  {
+    case 0:
       drawSurfaceSection();
       drawMaterialSection();
       drawSunSection();
       drawPointLightSection();
       drawFloorSection();
       drawSkySection();
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Rendering"))
-    {
-      drawRenderingSection();
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Camera"))
-    {
-      drawCameraSection();
-      drawAnimationSection();
-      ImGui::EndTabItem();
-    }
-    ImGui::EndTabBar();
+      break;
+    case 1: drawRenderingSection();                      break;
+    case 2: drawCameraSection(); drawAnimationSection(); break;
   }
+  ImGui::EndChild();
+
   ImGui::End();
 }
 

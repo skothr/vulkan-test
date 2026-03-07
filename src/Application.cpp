@@ -1,6 +1,7 @@
 #include "Application.hpp"
 
 #include <imgui.h>
+#include <backends/imgui_impl_vulkan.h>
 #include <csignal>
 #include <cstring>
 #include <unistd.h>
@@ -76,10 +77,13 @@ void Application::initWindow ()
   });
   glfwSetKeyCallback(window, [](GLFWwindow *w, int key, int /*scancode*/, int action, int mods) {
     auto *app = (Application*)glfwGetWindowUserPointer(w);
-    // Alt-modified bindings are global shortcuts — fire even when ImGui has focus.
-    bool altKey = (mods & GLFW_MOD_ALT) != 0;
-    if (action == GLFW_PRESS && (!app->controlPanel.wantsKeyboard() || altKey))
+    // Alt-modified and function-key bindings are global — fire even when ImGui has focus.
+    bool altKey  = (mods & GLFW_MOD_ALT) != 0;
+    bool funcKey = (key >= GLFW_KEY_F1 && key <= GLFW_KEY_F25);
+    if (action == GLFW_PRESS && (!app->controlPanel.wantsKeyboard() || altKey || funcKey))
       { app->keys.process(key, mods); }
+    if (action == GLFW_PRESS && key == GLFW_KEY_ESCAPE)
+      { app->screenshotMgr.closePopup(); }
   });
 
   // Mouse button: left = orbit, middle = pan
@@ -150,6 +154,12 @@ void Application::setupKeyBindings ()
             [this]() { settings.showPanel = !settings.showPanel; });
   keys.bind(GLFW_KEY_I,      GLFW_MOD_ALT,     "Alt+I     Toggle ImGui demo window",
             [this]() { settings.showDemo = !settings.showDemo; });
+  keys.bind(GLFW_KEY_F12, 0,               "F12          Open screenshot options",
+            [this]() { screenshotMgr.openOptions(settings.screenshotSuffix); });
+  keys.bind(GLFW_KEY_F12, GLFW_MOD_CONTROL, "Ctrl+F12    Save auto-named screenshot (with UI)",
+            [this]() { screenshotMgr.requestComposite(settings.screenshotSuffix); });
+  keys.bind(GLFW_KEY_F12, GLFW_MOD_SHIFT, "Shift+F12   Save auto-named screenshot (scene only)",
+            [this]() { screenshotMgr.requestCapture(settings.screenshotSuffix); });
   keys.bind(GLFW_KEY_F1,     0,                "F1        Show key bindings",
             [this]() { keys.printHelp(); });
 
@@ -322,7 +332,10 @@ void Application::createSwapchain ()
   ci.imageExtent      = ext;
   ci.imageArrayLayers = 1;
   // TRANSFER_DST_BIT: blit from ray tracing storage image into swapchain
-  ci.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  // TRANSFER_SRC_BIT: copy swapchain image for composite screenshot capture
+  ci.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+                      | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                      | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
   uint32_t qis[] = { qf.graphics, qf.present };
   if (qf.graphics != qf.present)
   {
@@ -1045,73 +1058,96 @@ void Application::recordCommandBuffer (VkCommandBuffer cb, uint32_t imgIdx)
     VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
     0, 1, &asBarrier, 0, nullptr, 0, nullptr);
 
-  // --- Transition storage image: UNDEFINED -> GENERAL ---
-  VkImageMemoryBarrier toGeneral { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-  toGeneral.srcAccessMask       = 0;
-  toGeneral.dstAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
-  toGeneral.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
-  toGeneral.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
-  toGeneral.image               = storageImg;
-  toGeneral.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-  vkCmdPipelineBarrier(cb,
-    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-    0, 0, nullptr, 0, nullptr, 1, &toGeneral);
+  if (!screenshotMgr.isPopupOpen() || screenshotMgr.isRenderNeeded())
+  {
+    // --- Transition storage image: UNDEFINED -> GENERAL ---
+    VkImageMemoryBarrier toGeneral { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    toGeneral.srcAccessMask    = 0;
+    toGeneral.dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+    toGeneral.oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED;
+    toGeneral.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+    toGeneral.image            = storageImg;
+    toGeneral.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    vkCmdPipelineBarrier(cb,
+      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+      0, 0, nullptr, 0, nullptr, 1, &toGeneral);
 
-  // --- Trace rays ---
-  vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
-  vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeLayout,
-                          0, 1, &descSets[frame], 0, nullptr);
-  // Settings are uploaded via the params UBO (binding 3) in updateUBO() each frame.
-  pfnCmdTraceRays(cb, &sbtRgen, &sbtMiss, &sbtHit, &sbtCall,
-                  scExtent.width, scExtent.height, 1);
+    // --- Trace rays ---
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeLayout,
+                            0, 1, &descSets[frame], 0, nullptr);
+    pfnCmdTraceRays(cb, &sbtRgen, &sbtMiss, &sbtHit, &sbtCall,
+                    scExtent.width, scExtent.height, 1);
 
-  // --- Transition storage -> TRANSFER_SRC, swapchain -> TRANSFER_DST ---
-  VkImageMemoryBarrier copyBarriers[2] = {};
-  copyBarriers[0].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-  copyBarriers[0].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-  copyBarriers[0].dstAccessMask    = VK_ACCESS_TRANSFER_READ_BIT;
-  copyBarriers[0].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
-  copyBarriers[0].newLayout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-  copyBarriers[0].image            = storageImg;
-  copyBarriers[0].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    // --- Transition storage -> TRANSFER_SRC, swapchain -> TRANSFER_DST ---
+    VkImageMemoryBarrier copyBarriers[2] = {};
+    copyBarriers[0].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    copyBarriers[0].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+    copyBarriers[0].dstAccessMask    = VK_ACCESS_TRANSFER_READ_BIT;
+    copyBarriers[0].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
+    copyBarriers[0].newLayout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    copyBarriers[0].image            = storageImg;
+    copyBarriers[0].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
 
-  copyBarriers[1].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-  copyBarriers[1].srcAccessMask    = 0;
-  copyBarriers[1].dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT;
-  copyBarriers[1].oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED;
-  copyBarriers[1].newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  copyBarriers[1].image            = scImages[imgIdx];
-  copyBarriers[1].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    copyBarriers[1].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    copyBarriers[1].srcAccessMask    = 0;
+    copyBarriers[1].dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT;
+    copyBarriers[1].oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED;
+    copyBarriers[1].newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    copyBarriers[1].image            = scImages[imgIdx];
+    copyBarriers[1].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
 
-  vkCmdPipelineBarrier(cb,
-    VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_TRANSFER_BIT,
-    0, 0, nullptr, 0, nullptr, 2, copyBarriers);
+    vkCmdPipelineBarrier(cb,
+      VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_TRANSFER_BIT,
+      0, 0, nullptr, 0, nullptr, 2, copyBarriers);
 
-  // --- Blit storage image to swapchain (handles format differences) ---
-  VkImageBlit blit {};
-  blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-  blit.srcOffsets[1]  = { (int32_t)scExtent.width, (int32_t)scExtent.height, 1 };
-  blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-  blit.dstOffsets[1]  = { (int32_t)scExtent.width, (int32_t)scExtent.height, 1 };
-  vkCmdBlitImage(cb,
-    storageImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    scImages[imgIdx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-    1, &blit, VK_FILTER_NEAREST);
+    // --- Blit storage image to swapchain ---
+    VkImageBlit blit {};
+    blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    blit.srcOffsets[1]  = { (int32_t)scExtent.width, (int32_t)scExtent.height, 1 };
+    blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    blit.dstOffsets[1]  = { (int32_t)scExtent.width, (int32_t)scExtent.height, 1 };
+    vkCmdBlitImage(cb,
+      storageImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+      scImages[imgIdx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      1, &blit, VK_FILTER_NEAREST);
 
-  // --- Transition swapchain: TRANSFER_DST -> COLOR_ATTACHMENT_OPTIMAL (for ImGui pass) ---
-  VkImageMemoryBarrier toColorAtt { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-  toColorAtt.srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT;
-  toColorAtt.dstAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-  toColorAtt.oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  toColorAtt.newLayout        = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-  toColorAtt.image            = scImages[imgIdx];
-  toColorAtt.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-  vkCmdPipelineBarrier(cb,
-    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-    0, 0, nullptr, 0, nullptr, 1, &toColorAtt);
+    // swapchain: TRANSFER_DST → COLOR_ATTACHMENT_OPTIMAL (for ImGui pass)
+    VkImageMemoryBarrier postBlitBarrier { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    postBlitBarrier.srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT;
+    postBlitBarrier.dstAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    postBlitBarrier.oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    postBlitBarrier.newLayout        = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    postBlitBarrier.image            = scImages[imgIdx];
+    postBlitBarrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    vkCmdPipelineBarrier(cb,
+      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+      0, 0, nullptr, 0, nullptr, 1, &postBlitBarrier);
+
+  }
+  else
+  {
+    // Popup open, scene frozen — transition swapchain directly to COLOR_ATTACHMENT_OPTIMAL.
+    VkImageMemoryBarrier toAttachment { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    toAttachment.srcAccessMask    = 0;
+    toAttachment.dstAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    toAttachment.oldLayout        = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    toAttachment.newLayout        = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    toAttachment.image            = scImages[imgIdx];
+    toAttachment.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    vkCmdPipelineBarrier(cb,
+      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+      0, 0, nullptr, 0, nullptr, 1, &toAttachment);
+  }
+
+  // Scene preview — copy storageImg to preview image while popup is open.
+  // storageImg is in TRANSFER_SRC_OPTIMAL from the last full-render frame.
+  screenshotMgr.recordBeforeUI(cb);
 
   // --- ImGui render pass (overlays UI, transitions swapchain -> PRESENT_SRC_KHR) ---
   controlPanel.record(cb, imgIdx, scExtent);
+
+  screenshotMgr.recordAfterUI(cb, imgIdx);
 
   if (vkEndCommandBuffer(cb) != VK_SUCCESS)
     { throw std::runtime_error("vkEndCommandBuffer failed"); }
@@ -1153,6 +1189,7 @@ void Application::recreateSwapchain ()
   cleanupSwapchain();
   createSwapchain(); createImageViews(); createStorageImage();
   updateStorageImageDescriptor();
+  screenshotMgr.onSwapchainRecreate(scFormat, scExtent, scImages, storageImg);
   controlPanel.onSwapchainRecreate(dev, scFormat, scViews, scExtent);
 }
 
@@ -1190,6 +1227,8 @@ void Application::updateUBO (uint32_t fi)
 
 void Application::drawFrame ()
 {
+  screenshotMgr.update();
+
   vkWaitForFences(dev, 1, &inFlight[frame], VK_TRUE, UINT64_MAX);
 
   uint32_t imgIdx;
@@ -1203,6 +1242,8 @@ void Application::drawFrame ()
   controlPanel.beginFrame();
   controlPanel.draw({ fps, camTheta, camPhi, camDist });
   if (settings.showDemo) { ImGui::ShowDemoWindow(&settings.showDemo); }
+  controlPanel.drawDebugOverlay({ fps, camTheta, camPhi, camDist });
+  screenshotMgr.drawPopups();
   vkResetFences(dev, 1, &inFlight[frame]);
   vkResetCommandBuffer(cmdBufs[frame], 0);
   recordCommandBuffer(cmdBufs[frame], imgIdx);
@@ -1229,6 +1270,8 @@ void Application::drawFrame ()
   if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR || framebufferResized)
     { framebufferResized = false; recreateSwapchain(); }
   else if (res != VK_SUCCESS) { throw std::runtime_error("vkQueuePresentKHR failed"); }
+
+  screenshotMgr.processAfterPresent();
 
   frame = (frame + 1) % MAX_FRAMES;
 
@@ -1274,6 +1317,8 @@ void Application::initVulkan ()
   controlPanel.init(window, instance, physDev, dev,
                     qf.graphics, graphicsQ, cmdPool,
                     scFormat, scViews, scExtent, scMinImageCount);
+  screenshotMgr.init({ dev, physDev, graphicsQ, cmdPool },
+                     scFormat, scExtent, scImages, storageImg);
   setupKeyBindings();
 }
 
@@ -1320,6 +1365,7 @@ void Application::cleanup ()
   vkDestroyPipeline(dev, pipeline, nullptr);
   vkDestroyPipelineLayout(dev, pipeLayout, nullptr);
   vkDestroyCommandPool(dev, cmdPool, nullptr);
+  screenshotMgr.cleanup();   // preview descsets freed by ImGui pool above
   vkDestroyDevice(dev, nullptr);
   vkDestroySurfaceKHR(instance, surface, nullptr);
   vkDestroyInstance(instance, nullptr);

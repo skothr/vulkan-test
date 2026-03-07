@@ -38,9 +38,10 @@ public:
 
   struct DebugInfo { float fps; float camTheta, camPhi, camDist; };
 
-  void beginFrame ();
-  void draw       (const DebugInfo &dbg);
-  void record     (VkCommandBuffer cb, uint32_t imgIdx, VkExtent2D extent);
+  void beginFrame      ();
+  void draw            (const DebugInfo &dbg);
+  void drawDebugOverlay(const DebugInfo &dbg);
+  void record          (VkCommandBuffer cb, uint32_t imgIdx, VkExtent2D extent);
 
   // Returns true only after init(); safe to call before init().
   bool wantsMouse    () const;
@@ -61,7 +62,6 @@ private:
   void createFramebuffers  (VkDevice dev, const std::vector<VkImageView> &views, VkExtent2D extent);
   void destroyFramebuffers (VkDevice dev);
 
-  void drawDebugOverlay      (const DebugInfo &dbg);
   void drawSurfaceSection    ();
   void drawMaterialSection   ();
   void drawSunSection        ();
@@ -71,4 +71,5 @@ private:
   void drawRenderingSection  ();
   void drawCameraSection     ();
   void drawAnimationSection  ();
+  void drawCaptureSection    ();
 };

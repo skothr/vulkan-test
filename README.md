@@ -1,10 +1,17 @@
 # Vibe coding test project
 
-A minimal Vulkan application generated via vibe coding with Claude Code, used to test AI-assisted C++ graphics development. Displays a colored rotating cube using the Vulkan graphics API.
+A Vulkan ray tracing application generated via vibe coding with Claude Code, used to test AI-assisted C++ graphics development.
+
+## Screenshots
+
+| | | |
+|:---:|:---:|:---:|
+| ![Glass sphere](screenshots/screenshot-sphere.png) | ![Cube surface](screenshots/screenshot-cube.png) | ![Blobby spheres](screenshots/screenshot-blobbies.png) |
+| Glass sphere with caustics | Checkerboard cube surface | 4D Blobby hypersurface |
 
 ## What it does
 
-Renders a 3D cube with per-vertex colors (red, green, blue, yellow, magenta, cyan, white, grey) rotating continuously on screen using a full Vulkan rendering pipeline — no helper libraries, just raw Vulkan + GLFW + GLM.
+Ray traces an analytic glass object on a checkerboard floor, with configurable sun and point lighting, caustics, reflections, and refractions. The surface shape, material, lighting, and camera are all adjustable at runtime via an ImGui settings panel.
 
 ## Build & Run
 
@@ -28,8 +35,13 @@ sudo pacman -S vulkan-tools vulkan-headers glslang glfw-x11 glm
 ## Structure
 
 ```
-src/main.cpp          # full Vulkan app (~450 lines, single file)
-shaders/shader.vert   # vertex shader — MVP transform
-shaders/shader.frag   # fragment shader — pass-through color
-Makefile              # builds shaders (SPIR-V) then compiles C++
+src/                        # C++ source
+  Application.cpp           # Vulkan setup, swapchain, ray tracing pipeline
+  ControlPanel.cpp          # ImGui settings panel
+  ScreenshotManager.cpp     # screenshot capture UI and logic
+shaders/                    # GLSL ray tracing shaders
+  shader.rgen               # ray generation
+  shader.rchit / .rmiss     # glass BSDF, floor/sky, shadow/caustic
+  shader.rint               # analytic sphere intersection
+Makefile                    # compiles shaders (SPIR-V) and C++
 ```
