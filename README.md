@@ -45,3 +45,7 @@ shaders/                    # GLSL ray tracing shaders
   shader.rint               # analytic sphere intersection
 Makefile                    # compiles shaders (SPIR-V) and C++
 ```
+
+
+# Note
+  This project was mostly vibe coded using AI.
