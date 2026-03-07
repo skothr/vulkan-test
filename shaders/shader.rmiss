@@ -69,12 +69,85 @@ float objectRadius ()
   return sigma * 3.0 + halfSep;
 }
 
-// PCG-based per-pixel hash — returns a uniform float in [0, 1).
-float pcgHash (uint seed)
+// 2D PCG hash — maps a uint pair to an independent uniform uint pair.
+uvec2 pcg2 (uvec2 v)
 {
-  uint state = seed * 747796405u + 2891336453u;
-  uint word  = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-  return float((word >> 22u) ^ word) / float(0xFFFFFFFFu);
+  v = v * 1664525u + 1013904223u;
+  v.x += v.y * 1664525u;
+  v.y += v.x * 1013904223u;
+  v ^= v >> 16u;
+  return v;
+}
+
+// Returns sample i on the unit disk for the given world-space cell.
+// (ka, kb) are loop-specific constants that keep sun/shadow/point samples independent.
+vec2 cellDiskSample (uvec2 cell, int i, uint ka, uint kb)
+{
+  uvec2 seed = uvec2(cell.x * 2891336453u ^ cell.y * 1664525u,
+                     cell.x * 1013904223u ^ cell.y * 2891336453u);
+  uvec2 h   = pcg2(seed ^ uvec2(uint(i) * ka, uint(i) * kb + 1u));
+  float ang = float(h.x) * (6.28318 / float(0xFFFFFFFFu));
+  float rad = sqrt(float(h.y) / float(0xFFFFFFFFu));
+  return vec2(cos(ang), sin(ang)) * rad;
+}
+
+// Bilinearly blends disk sample i across the 4 surrounding world-space grid cells
+// at the given spatial scale.  (Internal helper — call blendedDiskSample instead.)
+vec2 bilinearCells (vec2 wpos, float scale, int i, uint ka, uint kb)
+{
+  vec2  uv  = wpos / scale;
+  uvec2 ci  = uvec2(ivec2(floor(uv)));
+  vec2  fr  = fract(uv);
+  vec2  sm  = fr * fr * (3.0 - 2.0 * fr);   // smoothstep — C¹ continuity
+  vec2  s00 = cellDiskSample(ci,                 i, ka, kb);
+  vec2  s10 = cellDiskSample(ci + uvec2(1u, 0u), i, ka, kb);
+  vec2  s01 = cellDiskSample(ci + uvec2(0u, 1u), i, ka, kb);
+  vec2  s11 = cellDiskSample(ci + uvec2(1u, 1u), i, ka, kb);
+  return mix(mix(s00, s10, sm.x), mix(s01, s11, sm.x), sm.y);
+}
+
+// Three-octave bilinear blend with per-pixel dither.
+//
+// Single-octave bilinear blending creates flat cell interiors (no variation within
+// a cell) and visible seams at cell boundaries where adjacent cells' sample sets
+// differ sharply.  Two fixes:
+//
+//  • Three octaves (scales: r, r/2, r/4, weights 4:2:1): each finer octave fills
+//    in variation WITHIN the cells of the coarser octaves, eliminating flat regions
+//    and breaking up the blotchy pattern at all radius values.
+//
+//  • Per-pixel dither (pc.causticDitherAmt): mixes in a small amount of fully
+//    independent per-pixel noise.  This decorrelates immediately adjacent pixels
+//    at cell boundaries, turning the sharp seam into smooth grain the eye reads
+//    as noise rather than structure.
+//
+// blendRadius = 0: dither=1 implicitly (falls back to pure per-pixel white noise).
+vec2 blendedDiskSample (vec2 wpos, float blendRadius, int i, uint ka, uint kb)
+{
+  // Per-pixel white-noise sample (used for fallback and dithering)
+  uvec2 pseed = uvec2(gl_LaunchIDEXT.x * ka, gl_LaunchIDEXT.y * kb);
+  uvec2 ph    = pcg2(pseed ^ uvec2(uint(i) * ka, uint(i) * kb + 1u));
+  float pang  = float(ph.x) * (6.28318 / float(0xFFFFFFFFu));
+  float prad  = sqrt(float(ph.y) / float(0xFFFFFFFFu));
+  vec2  pixNoise = vec2(cos(pang), sin(pang)) * prad;
+
+  if (blendRadius <= 0.0) { return pixNoise; }
+
+  // Three octaves: each finer scale fills detail inside larger cells
+  vec2 s1 = bilinearCells(wpos, blendRadius,        i, ka,               kb            );
+  vec2 s2 = bilinearCells(wpos, blendRadius * 0.5,  i, ka ^ 0xCAFEBABEu, kb ^ 0xDEADBEEFu);
+  vec2 s3 = bilinearCells(wpos, blendRadius * 0.25, i, ka ^ 0xDEADF00Du, kb ^ 0xC0FFEE00u);
+  vec2 blended = (s1 * 4.0 + s2 * 2.0 + s3) * (1.0 / 7.0);
+
+  // Scale blend strength with radius so small values stay noise-like and the
+  // transition is gradual across the slider range rather than snapping instantly.
+  // smoothstep ramps from 0→1 over [0, 0.5] world units — at radius=0.09 this
+  // gives ~9% blend weight, not 80%, preventing the abrupt snap.
+  float blendFactor = smoothstep(0.0, 0.5, blendRadius);
+
+  // Dither mixes per-pixel noise into the blended result to break up seams.
+  // Both the blend and dither scale together so dither stays proportional.
+  return mix(pixNoise, blended, blendFactor * (1.0 - pc.causticDitherAmt));
 }
 
 void main ()
@@ -138,28 +211,8 @@ void main ()
     float objR       = objectRadius();
     float omegaGlass = 3.14159 * objR * objR / (distToGlass * distToGlass);
 
-    // World-space phase: bilinearly interpolate a per-cell hash keyed on the
-    // floor hit position (not screen pixel), so the noise pattern is anchored
-    // to the world and does not slide when the camera moves.
-    // causticBlendRadius controls cell size in world units.
-    vec2  pCell = p.xy / max(pc.causticBlendRadius, 0.001);
-    ivec2 iblk  = ivec2(floor(pCell));
-    vec2  frac  = fract(pCell);
-    // Offset by large constant to keep uint arithmetic positive for typical scene coords
-    uvec2 ublk  = uvec2(iblk + ivec2(65536));
-    float ph00  = pcgHash( ublk.x      * 1664525u +  ublk.y      * 1013904223u) * 6.28318;
-    float ph10  = pcgHash((ublk.x+1u)  * 1664525u +  ublk.y      * 1013904223u) * 6.28318;
-    float ph01  = pcgHash( ublk.x      * 1664525u + (ublk.y+1u)  * 1013904223u) * 6.28318;
-    float ph11  = pcgHash((ublk.x+1u)  * 1664525u + (ublk.y+1u)  * 1013904223u) * 6.28318;
-    vec2  cv    = mix(mix(vec2(cos(ph00), sin(ph00)), vec2(cos(ph10), sin(ph10)), frac.x),
-                      mix(vec2(cos(ph01), sin(ph01)), vec2(cos(ph11), sin(ph11)), frac.x), frac.y);
-    float worldPhase = atan(cv.y, cv.x);
-
-    // Per-pixel dither: small screen-space random offset breaks up any residual
-    // grid pattern from the world-space tiling without reintroducing camera-tracking.
-    float ditherPhase = pcgHash(gl_LaunchIDEXT.x * 1664525u + gl_LaunchIDEXT.y * 1013904223u + 99u)
-                        * 6.28318 * pc.causticDitherAmt;
-    float pixPhase = worldPhase + ditherPhase;
+    // Each caustic/shadow loop uses blendedDiskSample with distinct (ka,kb) constants
+    // to keep their sample sequences independent.
 
     // ── Directional sun ──────────────────────────────────────────────────
     if (pc.sunEnabled != 0)
@@ -189,9 +242,8 @@ void main ()
         vec3 causticAccum = vec3(0.0);
         for (int i = 0; i < pc.nCaustics; i++)
         {
-          float angle  = float(i) * 2.39996 + pixPhase;
-          float rad    = objR * SAMP * sqrt((float(i) + 0.5) / float(pc.nCaustics));
-          vec3  diskPt = GLASS_CENTER + b1 * (rad * cos(angle)) + b2 * (rad * sin(angle));
+          vec2  s      = blendedDiskSample(p.xy, pc.causticBlendRadius, i, 2891336453u, 747796405u) * objR * SAMP;
+          vec3  diskPt = GLASS_CENTER + b1 * s.x + b2 * s.y;
           vec3  sdir   = normalize(diskPt - p);
           float sdist  = distToGlass + objR * SAMP + 1.0;
 
@@ -237,9 +289,8 @@ void main ()
         float shadowAccum = 0.0;
         for (int i = 0; i < sN; i++)
         {
-          float sAngle  = float(i) * 2.39996 + pixPhase + 1.5708;
-          float sRad    = sRmax * sqrt((float(i) + 0.5) / float(sN));
-          vec3  lSample = ptPos + sb1 * (sRad * cos(sAngle)) + sb2 * (sRad * sin(sAngle));
+          vec2  ss      = blendedDiskSample(p.xy, pc.causticBlendRadius, i, 1664525u, 1013904223u) * sRmax;
+          vec3  lSample = ptPos + sb1 * ss.x + sb2 * ss.y;
           vec3  lDir    = normalize(lSample - p);
           float lDist   = length(lSample - p);
           causticPrd = vec4(1.0, 1.0, 1.0, -1.0);
@@ -262,9 +313,8 @@ void main ()
         vec3 causticAccumPt = vec3(0.0);
         for (int i = 0; i < pc.nCaustics; i++)
         {
-          float angle  = float(i) * 2.39996 + pixPhase + 3.14159;  // π offset from sun samples
-          float rad    = objR * SAMP * sqrt((float(i) + 0.5) / float(pc.nCaustics));
-          vec3  diskPt = GLASS_CENTER + b1 * (rad * cos(angle)) + b2 * (rad * sin(angle));
+          vec2  s      = blendedDiskSample(p.xy, pc.causticBlendRadius, i, 1013904223u, 2891336453u) * objR * SAMP;
+          vec3  diskPt = GLASS_CENTER + b1 * s.x + b2 * s.y;
           vec3  sdir   = normalize(diskPt - p);
           float sdist  = distToGlass + objR * SAMP + 1.0;
 

@@ -361,11 +361,10 @@ void ControlPanel::drawRenderingSection ()
   if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Caustic sampling disk radius as a\nmultiple of the glass object radius.\n1.0 = tight fit, >1 smooths edges."); }
   ImGui::SliderFloat("Miss Falloff",      &settings.causticFalloff,    0.5f,  16.0f, "%.1f");
   if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Gaussian attenuation sharpness for\nrays that narrowly miss the light.\nHigher = harder caustic edges."); }
-  ImGui::SliderFloat("Blend Radius",      &settings.causticBlendRadius, 0.01f, 2.0f, "%.3f");
-  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("World-space cell size for phase interpolation.\nSmaller = finer noise grain, larger = coarser blobs.\nNoise is anchored to the world, not the screen."); }
+  ImGui::SliderFloat("Blend Radius",      &settings.causticBlendRadius, 0.0f,  2.0f, "%.3f");
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("World-space cell size for caustic sample blending.\nThree octaves (r, r/2, r/4) fill in detail at all scales.\n0 = per-pixel white noise (no blending)."); }
   ImGui::SliderFloat("Dither",            &settings.causticDitherAmt,   0.0f,  1.0f, "%.2f");
-  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Per-pixel random phase on top of world-space hash.\n0 = pure world-space tiling, 1 = fully random per pixel.\nBreaks up grid-like artifacts from the cell pattern."); }
-
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Mix per-pixel noise into the blended samples to\nbreak up cell-boundary seams. 0 = pure blend,\n1 = pure per-pixel white noise."); }
   // ── Shadows ───────────────────────────────────────────────────────────────
   ImGui::Separator();
   ImGui::TextDisabled("Soft Shadows");

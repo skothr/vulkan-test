@@ -2,7 +2,7 @@
  "permissions": {
  "deny": [
  "Read(./.git/**)",
- "Read(./build/**)",
+ "Read(./build/**)"
  ]
  }
 }

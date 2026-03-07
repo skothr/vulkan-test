@@ -49,10 +49,10 @@ struct ParamsUBO
   int   shadowSamples;    // soft-shadow ray count (1 = hard shadow)
   float shadowSoftness;   // disk radius multiplier on pointLightRadius
   // Caustics
-  float causticDiskScale;   // sampling disk radius multiplier on objectRadius (1.0 = exact fit)
-  float causticFalloff;     // Gaussian miss-falloff sharpness for point-light caustics (higher = harder edge)
-  float causticBlendRadius; // world-space cell size for phase interpolation
-  float causticDitherAmt;   // per-pixel random phase added on top of world-space hash (0=none, 1=full)
+  float causticDiskScale;    // sampling disk radius multiplier on objectRadius (1.0 = exact fit)
+  float causticFalloff;      // Gaussian miss-falloff sharpness for point-light caustics (higher = harder edge)
+  float causticBlendRadius;  // world-space cell size for blended sampling (0 = per-pixel white noise)
+  float causticDitherAmt;    // per-pixel noise mixed in to break up cell-boundary seams (0–1)
   // Blobby quality
   int   blobMarchSteps;     // ray-march step count for 4D Gaussian intersection
 };
@@ -126,9 +126,8 @@ struct Settings
   // Caustics
   float causticDiskScale   =  1.05f;  // 1.0 = tight fit; >1 smooths edges, <1 crops
   float causticFalloff     =  4.00f;  // Gaussian sharpness for point-light miss attenuation
-  float causticBlendRadius =  0.25f;  // world-space cell size for phase interpolation
-  float causticDitherAmt   =  0.30f;  // per-pixel random phase strength (breaks up grid pattern)
-
+  float causticBlendRadius =  0.40f;  // world-space cell size for blended sampling; 0 = per-pixel white noise
+  float causticDitherAmt   =  0.20f;  // per-pixel noise to break up cell-boundary seams (0 = none, 1 = full noise)
   // Soft shadows
   int   shadowSamples  = 32;
   float shadowSoftness = 0.50f;
