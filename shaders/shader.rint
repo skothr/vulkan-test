@@ -1,0 +1,279 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+hitAttributeEXT vec3 sphereNormal;
+
+layout(set = 0, binding = 3) uniform ParamsBlock
+{
+  // Material
+  float ior,          tintAmount;   int   maxDepth;
+  float tintR,        tintG,        tintB;
+  // Sun
+  int   sunEnabled,   sunShadows,   sunCaustics;
+  float sunAzimuth,   sunElevation, sunIntensity, sunConeHalf;
+  float sunDiskExp,   sunCoronaExp;
+  float sunDiskR,     sunDiskG,     sunDiskB;
+  float sunCoronaR,   sunCoronaG,   sunCoronaB;
+  // Point light
+  int   pointEnabled, pointShadows, pointCaustics;
+  float pointLightX,  pointLightY,  pointLightZ,  pointLightRadius;
+  float pointLightR,  pointLightG,  pointLightB,  pointLightIntensity;
+  // Surface
+  int   surfaceType;
+  float sphereRadius, sphereHeight, cubeSize;
+  // Rendering
+  int   nCaustics;
+  float ambient,      floorZ;
+  // Floor
+  float floorScale;
+  float floorLightR,  floorLightG,  floorLightB;
+  float floorDarkR,   floorDarkG,   floorDarkB;
+  // Sky
+  float skyHorizonR,  skyHorizonG,  skyHorizonB;
+  float skyZenithR,   skyZenithG,   skyZenithB;
+  // 4D Gaussian Blobbies
+  float blob1X,      blob1Y,      blob1Z,      blob1W;
+  float blob1Mu,     blob1Sigma,  blob1SigmaW;
+  float blob2X,      blob2Y,      blob2Z,      blob2W;
+  float blob2Mu,     blob2Sigma,  blob2SigmaW;
+  float blobbiesThreshold;
+  int   shadowSamples;
+  float shadowSoftness;
+  float causticDiskScale;
+  float causticFalloff;
+  float causticBlendRadius;
+  float causticDitherAmt;
+  int   blobMarchSteps;
+} pc;
+
+// Returns the t at which the world ray crosses z = pc.floorZ, if that t lies in
+// (tLo, tHi) and within [tmin, tmax].  Returns -1 if not applicable.
+float floorCapT (float tLo, float tHi)
+{
+  float dz = gl_WorldRayDirectionEXT.z;
+  if (abs(dz) < 1e-6) { return -1.0; }
+  float t = (pc.floorZ - gl_WorldRayOriginEXT.z) / dz;
+  if (t < gl_RayTminEXT || t > gl_RayTmaxEXT || t <= tLo || t >= tHi) { return -1.0; }
+  return t;
+}
+
+// ── Sphere intersection ────────────────────────────────────────────────────
+
+void intersectSphere ()
+{
+  vec3  orig = gl_ObjectRayOriginEXT;
+  vec3  dir  = gl_ObjectRayDirectionEXT;
+
+  float a    = dot(dir, dir);
+  float b    = dot(orig, dir);
+  float c    = dot(orig, orig) - pc.sphereRadius * pc.sphereRadius;
+  float disc = b*b - a*c;
+  if (disc < 0.0) { return; }
+
+  float sqrtD = sqrt(disc);
+  float tNear = (-b - sqrtD) / a;
+  float tFar  = (-b + sqrtD) / a;
+
+  // ── Try near (entry) hit ──────────────────────────────────────────────────
+  if (tNear >= gl_RayTminEXT && tNear <= gl_RayTmaxEXT)
+  {
+    float wz = gl_WorldRayOriginEXT.z + tNear * gl_WorldRayDirectionEXT.z;
+    if (wz >= pc.floorZ - 1e-4)
+    {
+      sphereNormal = normalize(orig + tNear * dir);
+      reportIntersectionEXT(tNear, 0u);
+      return;
+    }
+    // Near hit is below the floor — try a floor cap between near and far
+    float tCap = floorCapT(tNear, tFar);
+    if (tCap > 0.0)
+    {
+      sphereNormal = vec3(0.0, 0.0, -1.0);   // flat bottom cap, outward normal points down
+      reportIntersectionEXT(tCap, 0u);
+    }
+    return;   // far hit (if any) is also below floor
+  }
+
+  // ── Ray may be inside the sphere (tNear < tmin): try far (exit) hit ──────
+  if (tFar >= gl_RayTminEXT && tFar <= gl_RayTmaxEXT)
+  {
+    float wz = gl_WorldRayOriginEXT.z + tFar * gl_WorldRayDirectionEXT.z;
+    if (wz >= pc.floorZ - 1e-4)
+    {
+      sphereNormal = normalize(orig + tFar * dir);
+      reportIntersectionEXT(tFar, 0u);
+      return;
+    }
+    // Far exit is below floor — cap at the floor plane
+    float tCap = floorCapT(gl_RayTminEXT, tFar);
+    if (tCap > 0.0)
+    {
+      sphereNormal = vec3(0.0, 0.0, -1.0);
+      reportIntersectionEXT(tCap, 0u);
+    }
+  }
+}
+
+// ── Cube intersection (slab method) ───────────────────────────────────────
+
+void intersectCube ()
+{
+  vec3 orig   = gl_ObjectRayOriginEXT;
+  vec3 dir    = gl_ObjectRayDirectionEXT;
+  vec3 invDir = 1.0 / dir;             // inf when dir component is zero — handled by IEEE slab math
+  vec3 s      = vec3(pc.cubeSize);
+
+  vec3 t1 = (-s - orig) * invDir;
+  vec3 t2 = ( s - orig) * invDir;
+
+  vec3  tNear3 = min(t1, t2);
+  vec3  tFar3  = max(t1, t2);
+  float tNear  = max(max(tNear3.x, tNear3.y), tNear3.z);
+  float tFar   = min(min(tFar3.x,  tFar3.y),  tFar3.z);
+
+  if (tNear > tFar + 1e-5 || tFar < gl_RayTminEXT) { return; }
+
+  float t = (tNear >= gl_RayTminEXT) ? tNear : tFar;
+  if (t > gl_RayTmaxEXT) { return; }
+
+  // ── Floor clip ────────────────────────────────────────────────────────────
+  float wz = gl_WorldRayOriginEXT.z + t * gl_WorldRayDirectionEXT.z;
+  if (wz < pc.floorZ - 1e-4)
+  {
+    float tLo  = max(tNear, gl_RayTminEXT);
+    float tCap = floorCapT(tLo, tFar);
+    if (tCap > 0.0)
+    {
+      sphereNormal = vec3(0.0, 0.0, -1.0);
+      reportIntersectionEXT(tCap, 0u);
+    }
+    return;
+  }
+
+  // ── Outward face normal ───────────────────────────────────────────────────
+  vec3 hitP = orig + t * dir;
+  vec3 absP = abs(hitP) / pc.cubeSize;
+  vec3 N;
+  if      (absP.x >= absP.y && absP.x >= absP.z) { N = vec3(sign(hitP.x), 0.0, 0.0); }
+  else if (absP.y >= absP.z)                      { N = vec3(0.0, sign(hitP.y), 0.0); }
+  else                                             { N = vec3(0.0, 0.0, sign(hitP.z)); }
+
+  sphereNormal = N;
+  reportIntersectionEXT(t, 0u);
+}
+
+// ── 4D Gaussian Blinn Blobby intersection ─────────────────────────────────
+//
+// Each blobby i has independent 3D and W (4th-dimension) standard deviations:
+//
+//   f_i(p) = mu_i · exp( -|p - c_i|²  / (2·sigma_i²)
+//                        - w_i²        / (2·sigmaW_i²) )
+//
+// The W term is a constant offset in 4D space; at w_i = 0 the blobby is a
+// plain 3D Gaussian.  Increasing |w_i| attenuates the blobby cross-section;
+// sigmaW_i controls how strongly the W offset affects the shape.
+//
+// Metasurface: F(p) = f_1(p) + f_2(p) = threshold.
+// Outward surface normal = -∇F  (field decreases away from the interior).
+
+float blobField (vec3 p)
+{
+  vec3  c1    = vec3(pc.blob1X, pc.blob1Y, pc.blob1Z);
+  vec3  c2    = vec3(pc.blob2X, pc.blob2Y, pc.blob2Z);
+  float d1sq  = dot(p - c1, p - c1);
+  float d2sq  = dot(p - c2, p - c2);
+  float s1sq  = pc.blob1Sigma  * pc.blob1Sigma;
+  float s2sq  = pc.blob2Sigma  * pc.blob2Sigma;
+  float sw1sq = pc.blob1SigmaW * pc.blob1SigmaW;
+  float sw2sq = pc.blob2SigmaW * pc.blob2SigmaW;
+  float f1    = pc.blob1Mu * exp(-d1sq / (2.0 * s1sq) - pc.blob1W * pc.blob1W / (2.0 * sw1sq));
+  float f2    = pc.blob2Mu * exp(-d2sq / (2.0 * s2sq) - pc.blob2W * pc.blob2W / (2.0 * sw2sq));
+  return f1 + f2;
+}
+
+// Analytical gradient ∇F with respect to p (W terms are constant w.r.t. p)
+vec3 blobGrad (vec3 p)
+{
+  vec3  c1    = vec3(pc.blob1X, pc.blob1Y, pc.blob1Z);
+  vec3  c2    = vec3(pc.blob2X, pc.blob2Y, pc.blob2Z);
+  float d1sq  = dot(p - c1, p - c1);
+  float d2sq  = dot(p - c2, p - c2);
+  float s1sq  = pc.blob1Sigma  * pc.blob1Sigma;
+  float s2sq  = pc.blob2Sigma  * pc.blob2Sigma;
+  float sw1sq = pc.blob1SigmaW * pc.blob1SigmaW;
+  float sw2sq = pc.blob2SigmaW * pc.blob2SigmaW;
+  float f1    = pc.blob1Mu * exp(-d1sq / (2.0 * s1sq) - pc.blob1W * pc.blob1W / (2.0 * sw1sq));
+  float f2    = pc.blob2Mu * exp(-d2sq / (2.0 * s2sq) - pc.blob2W * pc.blob2W / (2.0 * sw2sq));
+  return -(f1 / s1sq) * (p - c1)
+         -(f2 / s2sq) * (p - c2);
+}
+
+void intersectBlobbies ()
+{
+  vec3  orig   = gl_ObjectRayOriginEXT;
+  vec3  dir    = gl_ObjectRayDirectionEXT;
+  vec3  invDir = 1.0 / dir;
+
+  // Compute ray–AABB entry/exit in object space (must match AABB_HALF in Application.cpp)
+  const float MARCH_HALF = 4.0;
+  vec3  t1     = (-MARCH_HALF - orig) * invDir;
+  vec3  t2     = ( MARCH_HALF - orig) * invDir;
+  vec3  tNear3 = min(t1, t2);
+  vec3  tFar3  = max(t1, t2);
+  float tEntry = max(max(max(tNear3.x, tNear3.y), tNear3.z), gl_RayTminEXT);
+  float tExit  = min(min(min(tFar3.x,  tFar3.y),  tFar3.z),  gl_RayTmaxEXT);
+  if (tEntry >= tExit) { return; }
+
+  // Floor clip: constrain the march to above the floor plane
+  float wdirZ = gl_WorldRayDirectionEXT.z;
+  if (abs(wdirZ) > 1e-6)
+  {
+    float tFloor = (pc.floorZ - gl_WorldRayOriginEXT.z) / wdirZ;
+    if (wdirZ < 0.0) { tExit  = min(tExit,  tFloor); }
+    else             { tEntry = max(tEntry, tFloor); }
+    if (tEntry >= tExit) { return; }
+  }
+
+  // Fixed-step march with bisection refinement on sign change
+  int   STEPS = pc.blobMarchSteps;
+  float step  = (tExit - tEntry) / float(STEPS);
+  float t     = tEntry;
+  float prevF = blobField(orig + t * dir) - pc.blobbiesThreshold;
+
+  for (int i = 0; i < STEPS; i++)
+  {
+    t += step;
+    if (t > tExit) { break; }
+
+    float F = blobField(orig + t * dir) - pc.blobbiesThreshold;
+    if (prevF * F < 0.0)
+    {
+      // Sign change detected — bisect to refine
+      float tLo = t - step, tHi = t;
+      for (int j = 0; j < 12; j++)
+      {
+        float tMid = 0.5 * (tLo + tHi);
+        if ((blobField(orig + tMid * dir) - pc.blobbiesThreshold) * prevF < 0.0)
+          { tHi = tMid; }
+        else
+          { tLo = tMid; }
+      }
+      float tFinal = 0.5 * (tLo + tHi);
+
+      // Outward surface normal = -∇F
+      vec3 N = -blobGrad(orig + tFinal * dir);
+      if (dot(N, N) < 1e-12) { N = vec3(0.0, 0.0, 1.0); }
+      sphereNormal = normalize(N);
+      reportIntersectionEXT(tFinal, 0u);
+      return;
+    }
+    prevF = F;
+  }
+}
+
+void main ()
+{
+  if      (pc.surfaceType == 0) { intersectSphere();   }
+  else if (pc.surfaceType == 1) { intersectCube();     }
+  else                          { intersectBlobbies(); }
+}

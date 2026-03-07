@@ -6,6 +6,8 @@
 
 #include "Settings.hpp"
 
+struct ImFont;
+
 // ============================================================
 // ControlPanel — owns the Dear ImGui context, Vulkan descriptor
 // pool, render pass, and per-swapchain-image framebuffers.
@@ -52,14 +54,21 @@ private:
   VkDescriptorPool imguiPool = VK_NULL_HANDLE;
   VkRenderPass     imguiPass = VK_NULL_HANDLE;
   std::vector<VkFramebuffer> framebuffers;
+  ImFont          *fontDefault = nullptr;   // Roboto 15 px — UI panels
+  ImFont          *fontLarge   = nullptr;   // Roboto 30 px — FPS overlay
 
   void createRenderPass    (VkDevice dev, VkFormat fmt);
   void createFramebuffers  (VkDevice dev, const std::vector<VkImageView> &views, VkExtent2D extent);
   void destroyFramebuffers (VkDevice dev);
 
-  void drawDebugOverlay     (const DebugInfo &dbg);
-  void drawMaterialSection  ();
-  void drawAnimationSection ();
-  void drawCameraSection    ();
-  void drawLightingSection  ();
+  void drawDebugOverlay      (const DebugInfo &dbg);
+  void drawSurfaceSection    ();
+  void drawMaterialSection   ();
+  void drawSunSection        ();
+  void drawPointLightSection ();
+  void drawFloorSection      ();
+  void drawSkySection        ();
+  void drawRenderingSection  ();
+  void drawCameraSection     ();
+  void drawAnimationSection  ();
 };

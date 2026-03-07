@@ -1,5 +1,10 @@
 #include "Application.hpp"
 
+#include <imgui.h>
+#include <csignal>
+#include <cstring>
+#include <unistd.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -12,21 +17,29 @@
 #include <stdexcept>
 
 // ============================================================
+// AABB bounding box for analytic sphere intersection
+// The sphere is at the origin with radius controlled by push constants.
+// We use a generous AABB (±4 units) so no BLAS rebuild is needed
+// when the radius/size slider changes, and to accommodate 4D blobby
+// surfaces whose centers may be offset from the object origin.
+// ============================================================
 
-const std::vector<Vertex> VERTS = {
-  { { -.5f, -.5f,  .5f }, { 1, 0, 0 } }, { {  .5f, -.5f,  .5f }, { 0, 1, 0 } },
-  { {  .5f,  .5f,  .5f }, { 0, 0, 1 } }, { { -.5f,  .5f,  .5f }, { 1, 1, 0 } },
-  { { -.5f, -.5f, -.5f }, { 1, 0, 1 } }, { {  .5f, -.5f, -.5f }, { 0, 1, 1 } },
-  { {  .5f,  .5f, -.5f }, { 1, 1, 1 } }, { { -.5f,  .5f, -.5f }, { .5f, .5f, .5f } },
-};
-const std::vector<uint16_t> IDXS = {
-  0,1,2, 2,3,0,   // front
-  5,4,7, 7,6,5,   // back
-  4,0,3, 3,7,4,   // left
-  1,5,6, 6,2,1,   // right
-  3,2,6, 6,7,3,   // top
-  4,5,1, 1,0,4,   // bottom
-};
+static constexpr float AABB_HALF = 4.0f;
+
+// ============================================================
+// Signal handling
+// ============================================================
+
+static volatile sig_atomic_t g_shutdown = 0;
+
+static void onSignal (int sig)
+{
+  const char *msg = (sig == SIGINT)  ? "\nCaught SIGINT  — shutting down...\n"
+                  : (sig == SIGTERM) ? "\nCaught SIGTERM — shutting down...\n"
+                                     : "\nCaught signal  — shutting down...\n";
+  write(STDERR_FILENO, msg, strlen(msg));
+  g_shutdown = 1;
+}
 
 static const char *RT_EXTS[] = {
   VK_KHR_SWAPCHAIN_EXTENSION_NAME,
@@ -56,44 +69,62 @@ void Application::initWindow ()
 {
   glfwInit();
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan Cube (RT)", nullptr, nullptr);
+  window = glfwCreateWindow(WIDTH, HEIGHT, "Glass Sphere (RT)", nullptr, nullptr);
   glfwSetWindowUserPointer(window, this);
   glfwSetFramebufferSizeCallback(window, [](GLFWwindow *w, int, int) {
     ((Application*)glfwGetWindowUserPointer(w))->framebufferResized = true;
   });
   glfwSetKeyCallback(window, [](GLFWwindow *w, int key, int /*scancode*/, int action, int mods) {
     auto *app = (Application*)glfwGetWindowUserPointer(w);
-    if (action == GLFW_PRESS && !app->controlPanel.wantsKeyboard())
+    // Alt-modified bindings are global shortcuts — fire even when ImGui has focus.
+    bool altKey = (mods & GLFW_MOD_ALT) != 0;
+    if (action == GLFW_PRESS && (!app->controlPanel.wantsKeyboard() || altKey))
       { app->keys.process(key, mods); }
   });
 
-  // Left-click drag: orbit camera
+  // Mouse button: left = orbit, middle = pan
   glfwSetMouseButtonCallback(window, [](GLFWwindow *w, int button, int action, int /*mods*/) {
-    if (button != GLFW_MOUSE_BUTTON_LEFT) { return; }
-    auto *app = (Application*)glfwGetWindowUserPointer(w);
+    auto *app  = (Application*)glfwGetWindowUserPointer(w);
     if (app->controlPanel.wantsMouse()) { return; }
-    app->mouseDown = (action == GLFW_PRESS);
-    if (app->mouseDown)
-    {
-      // Disable cursor for unlimited drag range (no edge clamping)
-      glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-      glfwGetCursorPos(w, &app->lastMouseX, &app->lastMouseY);
-    }
-    else { glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_NORMAL); }
+    bool press = (action == GLFW_PRESS);
+    if (button == GLFW_MOUSE_BUTTON_LEFT)   { app->mouseDown  = press; }
+    if (button == GLFW_MOUSE_BUTTON_MIDDLE) { app->middleDown = press; }
+    if (press) { glfwGetCursorPos(w, &app->lastMouseX, &app->lastMouseY); }
   });
 
   glfwSetCursorPosCallback(window, [](GLFWwindow *w, double x, double y) {
     auto *app = (Application*)glfwGetWindowUserPointer(w);
-    if (!app->mouseDown) { return; }
+    if (!app->mouseDown && !app->middleDown) { return; }
     float dx = (float)(x - app->lastMouseX);
     float dy = (float)(y - app->lastMouseY);
     app->lastMouseX = x;
     app->lastMouseY = y;
-    // Horizontal drag → orbit around world Z (ground-parallel, no roll)
-    // Vertical drag   → change elevation; dy sign flipped so drag-down = look-down
-    float minPhi = glm::asin(glm::clamp(0.4f / app->camDist, -1.0f, 1.0f));
-    app->camTheta -= dx * app->settings.sensitivity;
-    app->camPhi    = glm::clamp(app->camPhi + dy * app->settings.sensitivity, minPhi, 1.4f);
+
+    if (app->mouseDown)
+    {
+      // Left drag: orbit around camTarget
+      float minPhi = glm::asin(glm::clamp(0.3f / app->camDist, -1.0f, 1.0f));
+      app->camTheta -= dx * app->settings.sensitivity;
+      app->camPhi    = glm::clamp(app->camPhi + dy * app->settings.sensitivity, minPhi, 1.4f);
+    }
+    if (app->middleDown)
+    {
+      // Pan camTarget so the scene point under the cursor stays fixed.
+      // World units per pixel at the target plane = 2*d*tan(FOV/2) / winH.
+      // FOV = 45° vertical, so tan(22.5°) = sqrt(2)-1 ≈ 0.41421356.
+      int winW, winH;
+      glfwGetWindowSize(w, &winW, &winH);
+      float panScale = 2.0f * app->camDist * 0.41421356f / (float)winH;
+
+      glm::vec3 camOff  = { app->camDist * glm::cos(app->camPhi) * glm::cos(app->camTheta),
+                            app->camDist * glm::cos(app->camPhi) * glm::sin(app->camTheta),
+                            app->camDist * glm::sin(app->camPhi) };
+      glm::vec3 forward = glm::normalize(-camOff);
+      glm::vec3 right   = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 0.0f, 1.0f)));
+      glm::vec3 up      = glm::normalize(glm::cross(right, forward));
+      app->camTarget   -= dx * right * panScale;
+      app->camTarget   += dy * up    * panScale;
+    }
   });
 
   // Scroll: zoom in/out (10 % per notch)
@@ -102,7 +133,7 @@ void Application::initWindow ()
     if (app->controlPanel.wantsMouse()) { return; }
     app->camDist = glm::clamp(app->camDist * (1.0f - (float)dy * app->settings.zoomSpeed), 0.5f, 20.0f);
     // Re-clamp phi in case the new distance puts the camera below the ground
-    float minPhi = glm::asin(glm::clamp(0.4f / app->camDist, -1.0f, 1.0f));
+    float minPhi = glm::asin(glm::clamp(0.3f / app->camDist, -1.0f, 1.0f));
     app->camPhi  = glm::max(app->camPhi, minPhi);
   });
 }
@@ -113,10 +144,12 @@ void Application::setupKeyBindings ()
 {
   keys.bind(GLFW_KEY_Q,      GLFW_MOD_CONTROL, "Ctrl+Q    Quit",
             [this]() { glfwSetWindowShouldClose(window, GLFW_TRUE); });
-  keys.bind(GLFW_KEY_ESCAPE, 0,                "Escape    Quit",
-            [this]() { glfwSetWindowShouldClose(window, GLFW_TRUE); });
   keys.bind(GLFW_KEY_D,      GLFW_MOD_ALT,     "Alt+D     Cycle debug overlay (off / FPS / verbose)",
-            [this]() { settings.debugLevel = (settings.debugLevel + 1) % 3; });
+            [this]() { settings.debugLevel = (DebugLevel)(((int)settings.debugLevel + 1) % 3); });
+  keys.bind(GLFW_KEY_TAB,    0,                "Tab       Toggle settings panel",
+            [this]() { settings.showPanel = !settings.showPanel; });
+  keys.bind(GLFW_KEY_I,      GLFW_MOD_ALT,     "Alt+I     Toggle ImGui demo window",
+            [this]() { settings.showDemo = !settings.showDemo; });
   keys.bind(GLFW_KEY_F1,     0,                "F1        Show key bindings",
             [this]() { keys.printHelp(); });
 
@@ -385,45 +418,45 @@ void Application::createStorageImage ()
               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
               storageImg, storageMem);
   storageView = createImageView(storageImg, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
+
 }
 
 // ------ Descriptor Set Layout ------
 
 void Application::createDescriptorSetLayout ()
 {
-  // binding 0: TLAS         (raygen)
-  // binding 1: storage img  (raygen)
-  // binding 2: UBO          (raygen)
-  // binding 3: vertex SSBO  (closest-hit)
-  // binding 4: index SSBO   (closest-hit)
-  VkDescriptorSetLayoutBinding bindings[5] = {};
-  bindings[0].binding        = 0;
-  bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+  // binding 0: TLAS         (raygen, closest-hit, miss — shadow rays fire from miss shader)
+  // binding 1: storage img  (raygen — rgba8 display output)
+  // binding 2: UBO          (raygen — model/view/proj matrices)
+  // binding 3: ParamsUBO    (closest-hit, miss, intersection — all shader-readable settings)
+  // binding 4: accum image  (raygen — rgba32f HDR accumulation buffer)
+  VkDescriptorSetLayoutBinding bindings[4] = {};
+  bindings[0].binding         = 0;
+  bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
   bindings[0].descriptorCount = 1;
-  bindings[0].stageFlags     = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+  bindings[0].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR
+                              | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR
+                              | VK_SHADER_STAGE_MISS_BIT_KHR;
 
-  bindings[1].binding        = 1;
-  bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+  bindings[1].binding         = 1;
+  bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
   bindings[1].descriptorCount = 1;
-  bindings[1].stageFlags     = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+  bindings[1].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-  bindings[2].binding        = 2;
-  bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  bindings[2].binding         = 2;
+  bindings[2].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
   bindings[2].descriptorCount = 1;
-  bindings[2].stageFlags     = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+  bindings[2].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-  bindings[3].binding        = 3;
-  bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  bindings[3].binding         = 3;
+  bindings[3].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
   bindings[3].descriptorCount = 1;
-  bindings[3].stageFlags     = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-
-  bindings[4].binding        = 4;
-  bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  bindings[4].descriptorCount = 1;
-  bindings[4].stageFlags     = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+  bindings[3].stageFlags      = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR
+                              | VK_SHADER_STAGE_MISS_BIT_KHR
+                              | VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
 
   VkDescriptorSetLayoutCreateInfo ci { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-  ci.bindingCount = 5;
+  ci.bindingCount = 4;
   ci.pBindings    = bindings;
   if (vkCreateDescriptorSetLayout(dev, &ci, nullptr, &descLayout) != VK_SUCCESS)
     { throw std::runtime_error("vkCreateDescriptorSetLayout failed"); }
@@ -444,62 +477,86 @@ VkShaderModule Application::createShaderModule (const std::vector<char> &code)
 
 void Application::createRTPipeline ()
 {
-  auto rgenCode  = readFile("shaders/compiled/shader.rgen.spv");
-  auto rmissCode = readFile("shaders/compiled/shader.rmiss.spv");
-  auto rchitCode = readFile("shaders/compiled/shader.rchit.spv");
+  auto rgenCode        = readFile("shaders/compiled/shader.rgen.spv");
+  auto rmissCode       = readFile("shaders/compiled/shader.rmiss.spv");
+  auto rmissShadowCode = readFile("shaders/compiled/shader_shadow.rmiss.spv");
+  auto rchitCode       = readFile("shaders/compiled/shader.rchit.spv");
+  auto rchitShadowCode = readFile("shaders/compiled/shader_shadow.rchit.spv");
+  auto rintCode        = readFile("shaders/compiled/shader.rint.spv");
 
-  VkShaderModule rgenMod  = createShaderModule(rgenCode);
-  VkShaderModule rmissMod = createShaderModule(rmissCode);
-  VkShaderModule rchitMod = createShaderModule(rchitCode);
+  VkShaderModule rgenMod        = createShaderModule(rgenCode);
+  VkShaderModule rmissMod       = createShaderModule(rmissCode);
+  VkShaderModule rmissShadowMod = createShaderModule(rmissShadowCode);
+  VkShaderModule rchitMod       = createShaderModule(rchitCode);
+  VkShaderModule rchitShadowMod = createShaderModule(rchitShadowCode);
+  VkShaderModule rintMod        = createShaderModule(rintCode);
 
-  // 3 shader stages
-  VkPipelineShaderStageCreateInfo stages[3] = {};
+  // 6 shader stages:
+  //   0: rgen, 1: main_miss, 2: shadow_miss, 3: main_hit, 4: shadow_hit, 5: intersection
+  VkPipelineShaderStageCreateInfo stages[6] = {};
   stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
   stages[0].stage  = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-  stages[0].module = rgenMod;  stages[0].pName = "main";
+  stages[0].module = rgenMod;        stages[0].pName = "main";
 
   stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
   stages[1].stage  = VK_SHADER_STAGE_MISS_BIT_KHR;
-  stages[1].module = rmissMod; stages[1].pName = "main";
+  stages[1].module = rmissMod;       stages[1].pName = "main";
 
   stages[2].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-  stages[2].stage  = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-  stages[2].module = rchitMod; stages[2].pName = "main";
+  stages[2].stage  = VK_SHADER_STAGE_MISS_BIT_KHR;
+  stages[2].module = rmissShadowMod; stages[2].pName = "main";
 
-  // 3 shader groups: raygen (0), miss (1), hit (2)
-  VkRayTracingShaderGroupCreateInfoKHR groups[3] = {};
-  // Group 0: raygen (general)
-  groups[0].sType              = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-  groups[0].type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-  groups[0].generalShader      = 0;
-  groups[0].closestHitShader   = VK_SHADER_UNUSED_KHR;
-  groups[0].anyHitShader       = VK_SHADER_UNUSED_KHR;
-  groups[0].intersectionShader = VK_SHADER_UNUSED_KHR;
-  // Group 1: miss (general)
-  groups[1].sType              = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-  groups[1].type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-  groups[1].generalShader      = 1;
-  groups[1].closestHitShader   = VK_SHADER_UNUSED_KHR;
-  groups[1].anyHitShader       = VK_SHADER_UNUSED_KHR;
-  groups[1].intersectionShader = VK_SHADER_UNUSED_KHR;
-  // Group 2: closest hit (triangles)
-  groups[2].sType              = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-  groups[2].type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-  groups[2].generalShader      = VK_SHADER_UNUSED_KHR;
-  groups[2].closestHitShader   = 2;
-  groups[2].anyHitShader       = VK_SHADER_UNUSED_KHR;
-  groups[2].intersectionShader = VK_SHADER_UNUSED_KHR;
+  stages[3].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  stages[3].stage  = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+  stages[3].module = rchitMod;       stages[3].pName = "main";
 
-  VkPushConstantRange pcRange {};
-  pcRange.stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
-  pcRange.offset     = 0;
-  pcRange.size       = sizeof(PushConsts);
+  stages[4].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  stages[4].stage  = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+  stages[4].module = rchitShadowMod; stages[4].pName = "main";
+
+  stages[5].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  stages[5].stage  = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+  stages[5].module = rintMod;        stages[5].pName = "main";
+
+  // 5 shader groups:
+  //   0: rgen        — general
+  //   1: main miss   — general
+  //   2: shadow miss — general
+  //   3: main hit    — procedural, closestHit=3, intersection=5
+  //   4: shadow hit  — procedural, closestHit=4, intersection=5
+  VkRayTracingShaderGroupCreateInfoKHR groups[5] = {};
+  auto initGroup = [](VkRayTracingShaderGroupCreateInfoKHR &g)
+  {
+    g.sType              = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+    g.generalShader      = VK_SHADER_UNUSED_KHR;
+    g.closestHitShader   = VK_SHADER_UNUSED_KHR;
+    g.anyHitShader       = VK_SHADER_UNUSED_KHR;
+    g.intersectionShader = VK_SHADER_UNUSED_KHR;
+  };
+  for (auto &g : groups) { initGroup(g); }
+
+  groups[0].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+  groups[0].generalShader = 0;
+
+  groups[1].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+  groups[1].generalShader = 1;
+
+  groups[2].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+  groups[2].generalShader = 2;
+
+  groups[3].type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR;
+  groups[3].closestHitShader   = 3;
+  groups[3].intersectionShader = 5;
+
+  groups[4].type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR;
+  groups[4].closestHitShader   = 4;
+  groups[4].intersectionShader = 5;
 
   VkPipelineLayoutCreateInfo pli { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
   pli.setLayoutCount         = 1;
   pli.pSetLayouts            = &descLayout;
-  pli.pushConstantRangeCount = 1;
-  pli.pPushConstantRanges    = &pcRange;
+  pli.pushConstantRangeCount = 0;
+  pli.pPushConstantRanges    = nullptr;
   if (vkCreatePipelineLayout(dev, &pli, nullptr, &pipeLayout) != VK_SUCCESS)
     { throw std::runtime_error("vkCreatePipelineLayout failed"); }
 
@@ -511,18 +568,21 @@ void Application::createRTPipeline ()
   vkGetPhysicalDeviceProperties2(physDev, &props2);
 
   VkRayTracingPipelineCreateInfoKHR ci { VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR };
-  ci.stageCount                   = 3;
+  ci.stageCount                   = 6;
   ci.pStages                      = stages;
-  ci.groupCount                   = 3;
+  ci.groupCount                   = 5;
   ci.pGroups                      = groups;
   ci.maxPipelineRayRecursionDepth = rtProps.maxRayRecursionDepth;
   ci.layout                       = pipeLayout;
   if (pfnCreateRTPipelines(dev, VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline) != VK_SUCCESS)
     { throw std::runtime_error("vkCreateRayTracingPipelinesKHR failed"); }
 
-  vkDestroyShaderModule(dev, rgenMod,  nullptr);
-  vkDestroyShaderModule(dev, rmissMod, nullptr);
-  vkDestroyShaderModule(dev, rchitMod, nullptr);
+  vkDestroyShaderModule(dev, rgenMod,        nullptr);
+  vkDestroyShaderModule(dev, rmissMod,       nullptr);
+  vkDestroyShaderModule(dev, rmissShadowMod, nullptr);
+  vkDestroyShaderModule(dev, rchitMod,       nullptr);
+  vkDestroyShaderModule(dev, rchitShadowMod, nullptr);
+  vkDestroyShaderModule(dev, rintMod,        nullptr);
 }
 
 // ------ Buffers ------
@@ -580,59 +640,50 @@ void Application::copyBuffer (VkBuffer src, VkBuffer dst, VkDeviceSize size)
   endOneTimeCmd(cb);
 }
 
-void Application::createVertexBuffer ()
+void Application::createAABBBuffer ()
 {
-  VkDeviceSize size = sizeof(VERTS[0]) * VERTS.size();
+  // A single AABB enclosing the analytic sphere.
+  // AABB_HALF is intentionally larger than the max sphere radius so the
+  // bounding box stays valid across all radius slider values.
+  struct AabbData { float minX, minY, minZ, maxX, maxY, maxZ; };
+  AabbData aabb { -AABB_HALF, -AABB_HALF, -AABB_HALF,
+                   AABB_HALF,  AABB_HALF,  AABB_HALF };
+
+  VkDeviceSize size = sizeof(aabb);
   VkBuffer stageBuf; VkDeviceMemory stageMem;
   createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                stageBuf, stageMem);
   void *data; vkMapMemory(dev, stageMem, 0, size, 0, &data);
-  memcpy(data, VERTS.data(), size); vkUnmapMemory(dev, stageMem);
-
-  // Needs STORAGE (for hit shader), TRANSFER_DST, AS_BUILD_INPUT, SHADER_DEVICE_ADDRESS
-  createBuffer(size,
-               VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-               VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-               vertBuf, vertMem, true);
-  copyBuffer(stageBuf, vertBuf, size);
-  vkDestroyBuffer(dev, stageBuf, nullptr); vkFreeMemory(dev, stageMem, nullptr);
-}
-
-void Application::createIndexBuffer ()
-{
-  VkDeviceSize size = sizeof(IDXS[0]) * IDXS.size();
-  VkBuffer stageBuf; VkDeviceMemory stageMem;
-  createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-               stageBuf, stageMem);
-  void *data; vkMapMemory(dev, stageMem, 0, size, 0, &data);
-  memcpy(data, IDXS.data(), size); vkUnmapMemory(dev, stageMem);
+  memcpy(data, &aabb, size); vkUnmapMemory(dev, stageMem);
 
   createBuffer(size,
                VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-               idxBuf, idxMem, true);
-  copyBuffer(stageBuf, idxBuf, size);
+               aabbBuf, aabbMem, true);
+  copyBuffer(stageBuf, aabbBuf, size);
   vkDestroyBuffer(dev, stageBuf, nullptr); vkFreeMemory(dev, stageMem, nullptr);
 }
 
 void Application::createUniformBuffers ()
 {
-  VkDeviceSize size = sizeof(UBO);
-  uboBufs.resize(MAX_FRAMES); uboMems.resize(MAX_FRAMES); uboMapped.resize(MAX_FRAMES);
+  VkDeviceSize uboSize    = sizeof(UBO);
+  VkDeviceSize paramsSize = sizeof(ParamsUBO);
+  uboBufs.resize(MAX_FRAMES);    uboMems.resize(MAX_FRAMES);    uboMapped.resize(MAX_FRAMES);
+  paramsBufs.resize(MAX_FRAMES); paramsMems.resize(MAX_FRAMES); paramsMapped.resize(MAX_FRAMES);
   for (int i = 0; i < MAX_FRAMES; i++)
   {
-    createBuffer(size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+    createBuffer(uboSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                  uboBufs[i], uboMems[i]);
-    vkMapMemory(dev, uboMems[i], 0, size, 0, &uboMapped[i]);
+    vkMapMemory(dev, uboMems[i], 0, uboSize, 0, &uboMapped[i]);
+
+    createBuffer(paramsSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                 paramsBufs[i], paramsMems[i]);
+    vkMapMemory(dev, paramsMems[i], 0, paramsSize, 0, &paramsMapped[i]);
   }
 }
 
@@ -649,19 +700,16 @@ VkDeviceAddress Application::getBufferAddress (VkBuffer buf)
 
 void Application::createBLAS ()
 {
-  VkAccelerationStructureGeometryTrianglesDataKHR triangles {
-    VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR };
-  triangles.vertexFormat             = VK_FORMAT_R32G32B32_SFLOAT;
-  triangles.vertexData.deviceAddress = getBufferAddress(vertBuf);
-  triangles.vertexStride             = sizeof(Vertex);
-  triangles.maxVertex                = (uint32_t)VERTS.size() - 1;
-  triangles.indexType                = VK_INDEX_TYPE_UINT16;
-  triangles.indexData.deviceAddress  = getBufferAddress(idxBuf);
+  // AABB geometry for the analytic sphere intersection shader
+  VkAccelerationStructureGeometryAabbsDataKHR aabbData {
+    VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR };
+  aabbData.data.deviceAddress = getBufferAddress(aabbBuf);
+  aabbData.stride             = sizeof(float) * 6;  // one AABB = 6 floats
 
   VkAccelerationStructureGeometryKHR geom { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
-  geom.geometryType       = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-  geom.geometry.triangles = triangles;
-  geom.flags              = VK_GEOMETRY_OPAQUE_BIT_KHR;
+  geom.geometryType    = VK_GEOMETRY_TYPE_AABBS_KHR;
+  geom.geometry.aabbs  = aabbData;
+  geom.flags           = VK_GEOMETRY_OPAQUE_BIT_KHR;
 
   VkAccelerationStructureBuildGeometryInfoKHR buildInfo {
     VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
@@ -670,7 +718,7 @@ void Application::createBLAS ()
   buildInfo.geometryCount = 1;
   buildInfo.pGeometries   = &geom;
 
-  uint32_t primCount = (uint32_t)IDXS.size() / 3;
+  uint32_t primCount = 1;  // one AABB primitive
   VkAccelerationStructureBuildSizesInfoKHR sizeInfo {
     VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
   pfnGetASBuildSizes(dev, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
@@ -691,8 +739,8 @@ void Application::createBLAS ()
                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, scratchBuf, scratchMem, true);
 
-  buildInfo.mode                     = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-  buildInfo.dstAccelerationStructure = blas;
+  buildInfo.mode                      = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+  buildInfo.dstAccelerationStructure  = blas;
   buildInfo.scratchData.deviceAddress = getBufferAddress(scratchBuf);
 
   VkAccelerationStructureBuildRangeInfoKHR range { primCount, 0, 0, 0 };
@@ -793,21 +841,25 @@ void Application::createSBT ()
   props2.pNext = &rtProps;
   vkGetPhysicalDeviceProperties2(physDev, &props2);
 
-  uint32_t handleSize      = rtProps.shaderGroupHandleSize;
-  uint32_t handleAlign     = rtProps.shaderGroupHandleAlignment;
-  uint32_t baseAlign       = rtProps.shaderGroupBaseAlignment;
-  uint32_t handleAligned   = (handleSize + handleAlign - 1) & ~(handleAlign - 1);
-  uint32_t groupCount      = 3; // rgen, miss, hit
+  uint32_t handleSize    = rtProps.shaderGroupHandleSize;
+  uint32_t handleAlign   = rtProps.shaderGroupHandleAlignment;
+  uint32_t baseAlign     = rtProps.shaderGroupBaseAlignment;
+  uint32_t handleAligned = (handleSize + handleAlign - 1) & ~(handleAlign - 1);
 
-  // Section offsets aligned to baseAlignment
-  uint32_t rgenOff = 0;
-  uint32_t missOff = ((handleAligned + baseAlign - 1) / baseAlign) * baseAlign;
-  uint32_t hitOff  = missOff + ((handleAligned + baseAlign - 1) / baseAlign) * baseAlign;
-  uint32_t sbtTotal = hitOff + handleAligned;
+  // Groups: rgen(0), main_miss(1), shadow_miss(2), main_hit(3), shadow_hit(4)
+  // SBT sections each start on a baseAlign boundary:
+  //   rgen : 1 entry
+  //   miss : 2 entries (main + shadow)
+  //   hit  : 2 entries (main + shadow)
+  auto alignUp = [](uint32_t v, uint32_t a) { return (v + a - 1) / a * a; };
+  uint32_t rgenOff  = 0;
+  uint32_t missOff  = alignUp(rgenOff + handleAligned,          baseAlign);
+  uint32_t hitOff   = alignUp(missOff + 2u * handleAligned,     baseAlign);
+  uint32_t sbtTotal = hitOff + 2u * handleAligned;
 
-  // Fetch raw handles from the pipeline
-  std::vector<uint8_t> handles(groupCount * handleSize);
-  if (pfnGetRTGroupHandles(dev, pipeline, 0, groupCount, handles.size(), handles.data()) != VK_SUCCESS)
+  // Fetch all 5 raw handles from the pipeline
+  std::vector<uint8_t> handles(5u * handleSize);
+  if (pfnGetRTGroupHandles(dev, pipeline, 0, 5, handles.size(), handles.data()) != VK_SUCCESS)
     { throw std::runtime_error("vkGetRayTracingShaderGroupHandlesKHR failed"); }
 
   createBuffer(sbtTotal,
@@ -817,15 +869,17 @@ void Application::createSBT ()
 
   void *mapped; vkMapMemory(dev, sbtMem, 0, sbtTotal, 0, &mapped);
   uint8_t *d = (uint8_t*)mapped;
-  memcpy(d + rgenOff, handles.data() + 0 * handleSize, handleSize);
-  memcpy(d + missOff, handles.data() + 1 * handleSize, handleSize);
-  memcpy(d + hitOff,  handles.data() + 2 * handleSize, handleSize);
+  memcpy(d + rgenOff,                    handles.data() + 0u * handleSize, handleSize); // rgen
+  memcpy(d + missOff,                    handles.data() + 1u * handleSize, handleSize); // main miss
+  memcpy(d + missOff + handleAligned,    handles.data() + 2u * handleSize, handleSize); // shadow miss
+  memcpy(d + hitOff,                     handles.data() + 3u * handleSize, handleSize); // main hit
+  memcpy(d + hitOff  + handleAligned,    handles.data() + 4u * handleSize, handleSize); // shadow hit
   vkUnmapMemory(dev, sbtMem);
 
   VkDeviceAddress base = getBufferAddress(sbtBuf);
-  sbtRgen = { base + rgenOff, handleAligned, handleAligned };
-  sbtMiss = { base + missOff, handleAligned, handleAligned };
-  sbtHit  = { base + hitOff,  handleAligned, handleAligned };
+  sbtRgen = { base + rgenOff, handleAligned,     handleAligned       };
+  sbtMiss = { base + missOff, handleAligned, 2u * handleAligned      };
+  sbtHit  = { base + hitOff,  handleAligned, 2u * handleAligned      };
   sbtCall = {};
 }
 
@@ -833,14 +887,13 @@ void Application::createSBT ()
 
 void Application::createDescriptorPool ()
 {
-  VkDescriptorPoolSize sizes[4] = {
-    { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, (uint32_t)MAX_FRAMES },
-    { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              (uint32_t)MAX_FRAMES },
-    { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             (uint32_t)MAX_FRAMES },
-    { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             (uint32_t)MAX_FRAMES * 2 },
+  VkDescriptorPoolSize sizes[3] = {
+    { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, (uint32_t)MAX_FRAMES     },
+    { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              (uint32_t)MAX_FRAMES     },  // outImage
+    { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             (uint32_t)MAX_FRAMES * 2 },  // view UBO + params UBO
   };
   VkDescriptorPoolCreateInfo ci { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-  ci.poolSizeCount = 4;
+  ci.poolSizeCount = 3;
   ci.pPoolSizes    = sizes;
   ci.maxSets       = MAX_FRAMES;
   if (vkCreateDescriptorPool(dev, &ci, nullptr, &descPool) != VK_SUCCESS)
@@ -882,7 +935,7 @@ void Application::createDescriptorSets ()
     w1.descriptorCount = 1;
     w1.pImageInfo      = &imgInfo;
 
-    // binding 2: UBO
+    // binding 2: view UBO (model/view/proj)
     VkDescriptorBufferInfo uboInfo { uboBufs[i], 0, sizeof(UBO) };
     VkWriteDescriptorSet w2 { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
     w2.dstSet          = descSets[i];
@@ -891,26 +944,17 @@ void Application::createDescriptorSets ()
     w2.descriptorCount = 1;
     w2.pBufferInfo     = &uboInfo;
 
-    // binding 3: vertex SSBO
-    VkDescriptorBufferInfo vertInfo { vertBuf, 0, VK_WHOLE_SIZE };
+    // binding 3: params UBO (all shader-readable settings)
+    VkDescriptorBufferInfo paramsInfo { paramsBufs[i], 0, sizeof(ParamsUBO) };
     VkWriteDescriptorSet w3 { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
     w3.dstSet          = descSets[i];
     w3.dstBinding      = 3;
-    w3.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w3.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     w3.descriptorCount = 1;
-    w3.pBufferInfo     = &vertInfo;
+    w3.pBufferInfo     = &paramsInfo;
 
-    // binding 4: index SSBO
-    VkDescriptorBufferInfo idxInfo { idxBuf, 0, VK_WHOLE_SIZE };
-    VkWriteDescriptorSet w4 { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-    w4.dstSet          = descSets[i];
-    w4.dstBinding      = 4;
-    w4.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    w4.descriptorCount = 1;
-    w4.pBufferInfo     = &idxInfo;
-
-    VkWriteDescriptorSet writes[] = { w0, w1, w2, w3, w4 };
-    vkUpdateDescriptorSets(dev, 5, writes, 0, nullptr);
+    VkWriteDescriptorSet writes[] = { w0, w1, w2, w3 };
+    vkUpdateDescriptorSets(dev, 4, writes, 0, nullptr);
   }
 }
 
@@ -918,14 +962,16 @@ void Application::updateStorageImageDescriptor ()
 {
   for (int i = 0; i < MAX_FRAMES; i++)
   {
-    VkDescriptorImageInfo imgInfo { VK_NULL_HANDLE, storageView, VK_IMAGE_LAYOUT_GENERAL };
-    VkWriteDescriptorSet w { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-    w.dstSet          = descSets[i];
-    w.dstBinding      = 1;
-    w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    w.descriptorCount = 1;
-    w.pImageInfo      = &imgInfo;
-    vkUpdateDescriptorSets(dev, 1, &w, 0, nullptr);
+    VkDescriptorImageInfo imgInfo   { VK_NULL_HANDLE, storageView, VK_IMAGE_LAYOUT_GENERAL };
+    VkWriteDescriptorSet  w1 { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+    w1.dstSet          = descSets[i];
+    w1.dstBinding      = 1;
+    w1.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    w1.descriptorCount = 1;
+    w1.pImageInfo      = &imgInfo;
+
+    VkWriteDescriptorSet writes[] = { w1 };
+    vkUpdateDescriptorSets(dev, 1, writes, 0, nullptr);
   }
 }
 
@@ -1015,10 +1061,7 @@ void Application::recordCommandBuffer (VkCommandBuffer cb, uint32_t imgIdx)
   vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
   vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeLayout,
                           0, 1, &descSets[frame], 0, nullptr);
-  auto pc = settings.toPushConsts();
-  vkCmdPushConstants(cb, pipeLayout,
-                     VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR,
-                     0, sizeof(pc), &pc);
+  // Settings are uploaded via the params UBO (binding 3) in updateUBO() each frame.
   pfnCmdTraceRays(cb, &sbtRgen, &sbtMiss, &sbtHit, &sbtCall,
                   scExtent.width, scExtent.height, 1);
 
@@ -1121,16 +1164,21 @@ void Application::updateUBO (uint32_t fi)
   float t = std::chrono::duration<float>(std::chrono::high_resolution_clock::now() - start).count();
 
   UBO ubo;
-  ubo.model = settings.autoRotate
-    ? glm::rotate(glm::mat4(1.0f), t * glm::radians(90.0f) * settings.rotSpeed, glm::vec3(0.5f, 1.0f, 0.0f))
+  glm::vec3 axis = glm::normalize(glm::vec3(settings.rotAxisX, settings.rotAxisY, settings.rotAxisZ));
+  glm::mat4 rot  = settings.autoRotate
+    ? glm::rotate(glm::mat4(1.0f), t * glm::radians(90.0f) * settings.rotSpeed, axis)
     : glm::mat4(1.0f);
-  glm::vec3 camPos = { camDist * glm::cos(camPhi) * glm::cos(camTheta),
+  ubo.model = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, settings.sphereHeight)) * rot;
+  glm::vec3 camOff = { camDist * glm::cos(camPhi) * glm::cos(camTheta),
                        camDist * glm::cos(camPhi) * glm::sin(camTheta),
                        camDist * glm::sin(camPhi) };
-  ubo.view  = glm::lookAt(camPos, glm::vec3(0, 0, 0), glm::vec3(0, 0, 1));
-  ubo.proj  = glm::perspective(glm::radians(45.0f), (float)scExtent.width / scExtent.height, 0.1f, 10.0f);
+  ubo.view  = glm::lookAt(camTarget + camOff, camTarget, glm::vec3(0, 0, 1));
+  ubo.proj  = glm::perspective(glm::radians(settings.fov), (float)scExtent.width / scExtent.height, 0.1f, 10.0f);
   ubo.proj[1][1] *= -1;
   memcpy(uboMapped[fi], &ubo, sizeof(ubo));
+
+  ParamsUBO params = settings.toParamsUBO();
+  memcpy(paramsMapped[fi], &params, sizeof(params));
 
   // Write model matrix into TLAS instance (transposed: glm is column-major, VkTransformMatrix is row-major)
   glm::mat4 t4 = glm::transpose(ubo.model);
@@ -1154,6 +1202,7 @@ void Application::drawFrame ()
   updateUBO(frame);
   controlPanel.beginFrame();
   controlPanel.draw({ fps, camTheta, camPhi, camDist });
+  if (settings.showDemo) { ImGui::ShowDemoWindow(&settings.showDemo); }
   vkResetFences(dev, 1, &inFlight[frame]);
   vkResetCommandBuffer(cmdBufs[frame], 0);
   recordCommandBuffer(cmdBufs[frame], imgIdx);
@@ -1211,8 +1260,7 @@ void Application::initVulkan ()
   createImageViews();
   createCommandPool();
   createStorageImage();
-  createVertexBuffer();
-  createIndexBuffer();
+  createAABBBuffer();
   createUniformBuffers();
   createBLAS();
   createTLAS();
@@ -1229,9 +1277,20 @@ void Application::initVulkan ()
   setupKeyBindings();
 }
 
+void Application::setupSignalHandlers ()
+{
+  std::signal(SIGINT,  onSignal);
+  std::signal(SIGTERM, onSignal);
+}
+
 void Application::mainLoop ()
 {
-  while (!glfwWindowShouldClose(window)) { glfwPollEvents(); drawFrame(); }
+  while (!glfwWindowShouldClose(window))
+  {
+    if (g_shutdown) { glfwSetWindowShouldClose(window, GLFW_TRUE); break; }
+    glfwPollEvents();
+    drawFrame();
+  }
   vkDeviceWaitIdle(dev);
 }
 
@@ -1241,7 +1300,8 @@ void Application::cleanup ()
   cleanupSwapchain();
   for (int i = 0; i < MAX_FRAMES; i++)
   {
-    vkDestroyBuffer(dev, uboBufs[i], nullptr); vkFreeMemory(dev, uboMems[i], nullptr);
+    vkDestroyBuffer(dev, paramsBufs[i], nullptr); vkFreeMemory(dev, paramsMems[i], nullptr);
+    vkDestroyBuffer(dev, uboBufs[i], nullptr);    vkFreeMemory(dev, uboMems[i], nullptr);
     vkDestroySemaphore(dev, imgAvail[i], nullptr);
     vkDestroySemaphore(dev, renderDone[i], nullptr);
     vkDestroyFence(dev, inFlight[i], nullptr);
@@ -1256,8 +1316,7 @@ void Application::cleanup ()
   vkDestroyBuffer(dev, blasBuf, nullptr);        vkFreeMemory(dev, blasMem, nullptr);
   vkDestroyDescriptorPool(dev, descPool, nullptr);
   vkDestroyDescriptorSetLayout(dev, descLayout, nullptr);
-  vkDestroyBuffer(dev, idxBuf, nullptr);         vkFreeMemory(dev, idxMem, nullptr);
-  vkDestroyBuffer(dev, vertBuf, nullptr);        vkFreeMemory(dev, vertMem, nullptr);
+  vkDestroyBuffer(dev, aabbBuf, nullptr);        vkFreeMemory(dev, aabbMem, nullptr);
   vkDestroyPipeline(dev, pipeline, nullptr);
   vkDestroyPipelineLayout(dev, pipeLayout, nullptr);
   vkDestroyCommandPool(dev, cmdPool, nullptr);

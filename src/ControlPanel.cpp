@@ -111,7 +111,19 @@ void ControlPanel::init (GLFWwindow *win, VkInstance inst, VkPhysicalDevice phys
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGui::StyleColorsDark();
-  ImGui::GetIO().IniFilename = nullptr;  // don't persist window layout
+  ImGuiIO &io    = ImGui::GetIO();
+  io.IniFilename = nullptr;  // don't persist window layout
+
+  // Load Roboto — bundled in lib/fonts/ for portability
+  const char *fontPath = "lib/fonts/Roboto-Regular.ttf";
+  fontDefault = io.Fonts->AddFontFromFileTTF(fontPath, 15.0f);
+  fontLarge   = io.Fonts->AddFontFromFileTTF(fontPath, 30.0f);
+  if (!fontDefault || !fontLarge)
+  {
+    // Fallback: keep ImGui's built-in font (fontDefault/fontLarge stay nullptr)
+    io.Fonts->AddFontDefault();
+    fontDefault = fontLarge = nullptr;
+  }
 
   ImGui_ImplGlfw_InitForVulkan(win, true);
 
@@ -180,34 +192,191 @@ bool ControlPanel::wantsKeyboard () const { return inited && ImGui::GetIO().Want
 // Per-frame UI sections
 // ============================================================
 
+void ControlPanel::drawSurfaceSection ()
+{
+  if (!ImGui::CollapsingHeader("Surface", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
+
+  int type = (int)settings.surfaceType;
+  ImGui::RadioButton("Sphere",     &type, (int)SurfaceType::SPHERE);    ImGui::SameLine();
+  ImGui::RadioButton("Cube",       &type, (int)SurfaceType::CUBE);      ImGui::SameLine();
+  ImGui::RadioButton("4D Surface", &type, (int)SurfaceType::SURFACE_4D);
+  settings.surfaceType = (SurfaceType)type;
+
+  if (settings.surfaceType == SurfaceType::SPHERE)
+  {
+    ImGui::SliderFloat("Radius", &settings.sphereRadius, 0.1f, 1.5f, "%.2f");
+    ImGui::SliderFloat("Z",      &settings.sphereHeight, -0.5f, 3.0f, "%.2f");
+  }
+  else if (settings.surfaceType == SurfaceType::CUBE)
+  {
+    ImGui::SliderFloat("Size",   &settings.cubeSize,     0.1f, 1.5f, "%.2f");
+    ImGui::SliderFloat("Z",      &settings.sphereHeight, -0.5f, 3.0f, "%.2f");
+  }
+  else
+  {
+    ImGui::SliderFloat("Height##blobs", &settings.sphereHeight,      -0.5f,  3.0f, "%.2f");
+    ImGui::SliderFloat("Threshold",     &settings.blobbiesThreshold,  0.01f,  2.0f, "%.3f");
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Cluster Center");
+    ImGui::SliderFloat("X##ctr",  &settings.blobsCenterX, -2.0f, 2.0f, "%.2f");
+    ImGui::SliderFloat("Y##ctr",  &settings.blobsCenterY, -2.0f, 2.0f, "%.2f");
+    ImGui::SliderFloat("Z##ctr",  &settings.blobsCenterZ, -2.0f, 2.0f, "%.2f");
+    ImGui::SliderFloat("Distance",&settings.blobsDist,     0.0f,  4.0f, "%.2f");
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Blobby 1");
+    ImGui::SliderFloat("Amplitude##b1",   &settings.blob1Mu,     0.1f, 4.0f,  "%.2f");
+    ImGui::SliderFloat("Sigma 3D##b1",    &settings.blob1Sigma,  0.05f, 2.0f, "%.3f");
+    ImGui::SliderFloat("W (4D amp)##b1",  &settings.blob1W,     -2.0f, 2.0f,  "%.2f");
+    ImGui::SliderFloat("Sigma 4D##b1",    &settings.blob1SigmaW, 0.05f, 2.0f, "%.3f");
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Blobby 2");
+    ImGui::SliderFloat("Amplitude##b2",   &settings.blob2Mu,     0.1f, 4.0f,  "%.2f");
+    ImGui::SliderFloat("Sigma 3D##b2",    &settings.blob2Sigma,  0.05f, 2.0f, "%.3f");
+    ImGui::SliderFloat("W (4D amp)##b2",  &settings.blob2W,     -2.0f, 2.0f,  "%.2f");
+    ImGui::SliderFloat("Sigma 4D##b2",    &settings.blob2SigmaW, 0.05f, 2.0f, "%.3f");
+  }
+}
+
 void ControlPanel::drawMaterialSection ()
 {
   if (!ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
   ImGui::SliderFloat("IOR",       &settings.ior,        1.0f, 3.0f);
   ImGui::SliderFloat("Tint",      &settings.tintAmount, 0.0f, 1.0f);
-  ImGui::SliderInt  ("Max Depth", &settings.maxDepth,   1,    8);
+  ImGui::ColorEdit3 ("Tint Color",&settings.tintR);
 }
 
 void ControlPanel::drawAnimationSection ()
 {
   if (!ImGui::CollapsingHeader("Animation", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
   ImGui::Checkbox   ("Auto Rotate", &settings.autoRotate);
-  ImGui::SliderFloat("Rot Speed",   &settings.rotSpeed, 0.0f, 5.0f);
+  ImGui::SliderFloat("Rot Speed",   &settings.rotSpeed,  0.0f,  5.0f);
+  ImGui::SliderFloat("Axis X",      &settings.rotAxisX, -1.0f,  1.0f, "%.2f");
+  ImGui::SliderFloat("Axis Y",      &settings.rotAxisY, -1.0f,  1.0f, "%.2f");
+  ImGui::SliderFloat("Axis Z",      &settings.rotAxisZ, -1.0f,  1.0f, "%.2f");
 }
 
 void ControlPanel::drawCameraSection ()
 {
   if (!ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
-  ImGui::SliderFloat("Sensitivity", &settings.sensitivity, 0.001f, 0.02f, "%.3f");
-  ImGui::SliderFloat("Zoom Speed",  &settings.zoomSpeed,   0.01f,  0.5f,  "%.2f");
+  ImGui::SliderFloat("FOV",         &settings.fov,         10.0f, 120.0f, "%.1f°");
+  ImGui::SliderFloat("Sensitivity", &settings.sensitivity,  0.001f, 0.02f, "%.3f");
+  ImGui::SliderFloat("Zoom Speed",  &settings.zoomSpeed,    0.01f,  0.5f,  "%.2f");
 }
 
-void ControlPanel::drawLightingSection ()
+void ControlPanel::drawSunSection ()
 {
-  if (!ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
-  ImGui::SliderFloat("Azimuth",   &settings.sunAzimuth,   -3.14159f, 3.14159f, "%.2f rad");
-  ImGui::SliderFloat("Elevation", &settings.sunElevation,  0.0f,     1.5707f,  "%.2f rad");
-  ImGui::SliderFloat("Intensity", &settings.sunIntensity,  0.0f,     5.0f);
+  if (!ImGui::CollapsingHeader("Sun", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
+  ImGui::Checkbox("Enabled##sun", &settings.sunEnabled);
+  if (settings.sunEnabled)
+  {
+    ImGui::SliderFloat("Azimuth##sun",   &settings.sunAzimuth,   -3.14159f, 3.14159f, "%.2f rad");
+    ImGui::SliderFloat("Elevation##sun", &settings.sunElevation,  0.0f,     1.5707f,  "%.2f rad");
+    ImGui::SliderFloat("Intensity##sun", &settings.sunIntensity,  0.0f,     5.0f);
+    ImGui::Checkbox("Shadows##sun",  &settings.sunShadows);  ImGui::SameLine();
+    ImGui::Checkbox("Caustics##sun", &settings.sunCaustics);
+    ImGui::Separator();
+    ImGui::SliderFloat("Disk Size",    &settings.sunConeHalf,  0.01f,   0.40f, "%.3f rad");
+    ImGui::SliderFloat("Disk Exp",     &settings.sunDiskExp,   8.0f,  512.0f,  "%.0f");
+    ImGui::ColorEdit3 ("Disk Color",   &settings.sunDiskR);
+    ImGui::SliderFloat("Corona Exp",   &settings.sunCoronaExp, 1.0f,   20.0f,  "%.1f");
+    ImGui::ColorEdit3 ("Corona Color", &settings.sunCoronaR);
+  }
+}
+
+void ControlPanel::drawPointLightSection ()
+{
+  if (!ImGui::CollapsingHeader("Point Light", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
+  ImGui::Checkbox("Enabled##pt", &settings.pointEnabled);
+  if (settings.pointEnabled)
+  {
+    ImGui::SliderFloat("X##pt",         &settings.pointLightX,         -5.0f,  5.0f, "%.2f");
+    ImGui::SliderFloat("Y##pt",         &settings.pointLightY,         -5.0f,  5.0f, "%.2f");
+    ImGui::SliderFloat("Z##pt",         &settings.pointLightZ,         -1.0f,  5.0f, "%.2f");
+    ImGui::SliderFloat("Radius##pt",    &settings.pointLightRadius,     0.0f,  2.0f, "%.2f");
+    ImGui::ColorEdit3 ("Color##pt",     &settings.pointLightR);
+    ImGui::SliderFloat("Intensity##pt", &settings.pointLightIntensity,  0.0f, 20.0f);
+    ImGui::Checkbox("Shadows##pt",  &settings.pointShadows);  ImGui::SameLine();
+    ImGui::Checkbox("Caustics##pt", &settings.pointCaustics);
+  }
+}
+
+void ControlPanel::drawFloorSection ()
+{
+  if (!ImGui::CollapsingHeader("Floor", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
+  ImGui::SliderFloat("Scale",       &settings.floorScale,  0.1f,  8.0f, "%.2f");
+  ImGui::SliderFloat("Z##floor",    &settings.floorZ,     -3.0f,  0.0f, "%.2f");
+  ImGui::ColorEdit3 ("Light Color", &settings.floorLightR);
+  ImGui::ColorEdit3 ("Dark Color",  &settings.floorDarkR);
+}
+
+void ControlPanel::drawSkySection ()
+{
+  if (!ImGui::CollapsingHeader("Sky", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
+  ImGui::ColorEdit3("Horizon", &settings.skyHorizonR);
+  ImGui::ColorEdit3("Zenith",  &settings.skyZenithR);
+}
+
+
+void ControlPanel::drawRenderingSection ()
+{
+  if (!ImGui::CollapsingHeader("Rendering", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
+
+  ImGui::Checkbox("Shadows",  &settings.shadowsEnabled);   ImGui::SameLine();
+  ImGui::Checkbox("Caustics", &settings.causticsEnabled);
+  ImGui::Separator();
+  ImGui::SliderFloat("Ambient",   &settings.ambient,   0.0f, 0.5f,  "%.2f");
+  ImGui::SliderInt  ("Max Depth", &settings.maxDepth,  1,    8);
+
+  // ── GPU cost estimate ─────────────────────────────────────────────────────
+  // Rays per floor pixel = caustic rays + shadow rays; blobby multiplies each
+  // by march steps (each ray traverses the AABB with N field evaluations).
+  bool   isBlobby = (settings.surfaceType == SurfaceType::SURFACE_4D);
+  float  blobMult = isBlobby ? (settings.blobMarchSteps / 32.0f) : 1.0f;
+  float  raysPerPx = (settings.nCaustics * 2.0f + settings.shadowSamples) * blobMult;
+  // Rough threshold: >500 = caution, >2000 = danger (GPU TDR risk)
+  ImVec4 costColor = (raysPerPx < 500.0f)  ? ImVec4(0.4f, 1.0f, 0.4f, 1.0f)
+                   : (raysPerPx < 2000.0f) ? ImVec4(1.0f, 0.85f, 0.1f, 1.0f)
+                                            : ImVec4(1.0f, 0.3f,  0.2f, 1.0f);
+  ImGui::Separator();
+  ImGui::TextColored(costColor, "GPU cost: ~%.0f ray-units/px", raysPerPx);
+  if (ImGui::IsItemHovered())
+  {
+    ImGui::SetTooltip("Rough relative cost per floor pixel.\n"
+                      "Green < 500 | Yellow < 2000 | Red = TDR risk\n"
+                      "= (caustics*2 + shadows) * blobMarchSteps/32\n"
+                      "Cost is multiplicative — lower one knob to compensate.");
+  }
+
+  // ── Caustics ─────────────────────────────────────────────────────────────
+  ImGui::Separator();
+  ImGui::TextDisabled("Caustics");
+  ImGui::SliderInt  ("Samples##caustic",  &settings.nCaustics,          1,    256);
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Backward caustic rays per floor pixel.\nMore = less noise, higher cost.\nCtrl+click to type a value above 256."); }
+  ImGui::SliderFloat("Disk Scale",        &settings.causticDiskScale,  0.01f,  3.0f, "%.2f");
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Caustic sampling disk radius as a\nmultiple of the glass object radius.\n1.0 = tight fit, >1 smooths edges."); }
+  ImGui::SliderFloat("Miss Falloff",      &settings.causticFalloff,    0.5f,  16.0f, "%.1f");
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Gaussian attenuation sharpness for\nrays that narrowly miss the light.\nHigher = harder caustic edges."); }
+  ImGui::SliderFloat("Blend Radius",      &settings.causticBlendRadius, 0.01f, 2.0f, "%.3f");
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("World-space cell size for phase interpolation.\nSmaller = finer noise grain, larger = coarser blobs.\nNoise is anchored to the world, not the screen."); }
+  ImGui::SliderFloat("Dither",            &settings.causticDitherAmt,   0.0f,  1.0f, "%.2f");
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Per-pixel random phase on top of world-space hash.\n0 = pure world-space tiling, 1 = fully random per pixel.\nBreaks up grid-like artifacts from the cell pattern."); }
+
+  // ── Shadows ───────────────────────────────────────────────────────────────
+  ImGui::Separator();
+  ImGui::TextDisabled("Soft Shadows");
+  ImGui::SliderInt  ("Samples##shadow",   &settings.shadowSamples,    1,   128);
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Shadow rays per floor pixel.\n1 = hard shadow, more = soft penumbra.\nCtrl+click to type a value above 16."); }
+  ImGui::SliderFloat("Softness",          &settings.shadowSoftness,   0.0f,  4.0f, "%.2f");
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Penumbra disk radius as a multiple\nof the point light radius."); }
+
+  // ── Blobby ────────────────────────────────────────────────────────────────
+  ImGui::Separator();
+  ImGui::TextDisabled("4D Surface");
+  ImGui::SliderInt  ("March Steps",       &settings.blobMarchSteps,   8,   128);
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Ray-march steps through the 4D\nGaussian blobby AABB.\nMore = sharper surface, higher cost.\nCtrl+click to type a value above 128."); }
 }
 
 void ControlPanel::beginFrame ()
@@ -219,7 +388,7 @@ void ControlPanel::beginFrame ()
 
 void ControlPanel::drawDebugOverlay (const DebugInfo &dbg)
 {
-  if (settings.debugLevel == 0) { return; }
+  if (settings.debugLevel == DebugLevel::OFF) { return; }
 
   const float    PAD = 10.0f;
   ImGuiWindowFlags flags =
@@ -228,12 +397,14 @@ void ControlPanel::drawDebugOverlay (const DebugInfo &dbg)
     ImGuiWindowFlags_NoNav           | ImGuiWindowFlags_NoMove;
 
   ImGui::SetNextWindowPos(ImVec2(PAD, PAD), ImGuiCond_Always);
-  ImGui::SetNextWindowBgAlpha(0.55f);
+  ImGui::SetNextWindowBgAlpha(0.85f);
   ImGui::Begin("##debug", nullptr, flags);
 
+  if (fontLarge) { ImGui::PushFont(fontLarge); }
   ImGui::Text("FPS  %.1f   (%.2f ms)", dbg.fps, 1000.0f / dbg.fps);
+  if (fontLarge) { ImGui::PopFont(); }
 
-  if (settings.debugLevel >= 2)
+  if (settings.debugLevel == DebugLevel::VERBOSE)
   {
     ImGui::Separator();
     ImGui::Text("Camera  θ %.2f  φ %.2f  d %.2f",
@@ -251,15 +422,43 @@ void ControlPanel::draw (const DebugInfo &dbg)
 {
   drawDebugOverlay(dbg);
 
+  if (!settings.showPanel) { return; }
+
   // Settings panel — anchored to the upper-right on first appearance
   ImGuiIO &io = ImGui::GetIO();
-  ImGui::SetNextWindowPos (ImVec2(io.DisplaySize.x - 310.0f, 10.0f), ImGuiCond_Once);
-  ImGui::SetNextWindowSize(ImVec2(300.0f, 0.0f), ImGuiCond_Once);
+  const float PAD_PANEL = 10.0f;
+  const float WIN_W     = 370.0f;
+  ImGui::SetNextWindowPos (ImVec2(io.DisplaySize.x - WIN_W - PAD_PANEL, PAD_PANEL), ImGuiCond_Appearing);
+  ImGui::SetNextWindowSize(ImVec2(WIN_W, 0.0f), ImGuiCond_Appearing);  // 0 height = auto-fit content
+  ImGui::SetNextWindowSizeConstraints(ImVec2(200.0f, 0.0f),
+                                      ImVec2(FLT_MAX, io.DisplaySize.y - PAD_PANEL * 2.0f));
   ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoSavedSettings);
-  drawMaterialSection();
-  drawAnimationSection();
-  drawCameraSection();
-  drawLightingSection();
+
+  if (ImGui::BeginTabBar("##tabs"))
+  {
+    if (ImGui::BeginTabItem("Scene"))
+    {
+      drawSurfaceSection();
+      drawMaterialSection();
+      drawSunSection();
+      drawPointLightSection();
+      drawFloorSection();
+      drawSkySection();
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Rendering"))
+    {
+      drawRenderingSection();
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Camera"))
+    {
+      drawCameraSection();
+      drawAnimationSection();
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
   ImGui::End();
 }
 

@@ -15,7 +15,7 @@
 
 // ============================================================
 
-const uint32_t WIDTH = 800, HEIGHT = 600;
+const uint32_t WIDTH = 1280, HEIGHT = 800;
 const int      MAX_FRAMES = 2;
 
 struct Vertex { glm::vec3 pos, color; };
@@ -29,7 +29,7 @@ struct QueueFamilies { uint32_t graphics, present; };
 class Application
 {
 public:
-  void run () { initWindow(); initVulkan(); mainLoop(); cleanup(); }
+  void run () { initWindow(); initVulkan(); setupSignalHandlers(); mainLoop(); cleanup(); }
 
 private:
   GLFWwindow  *window = nullptr;
@@ -41,12 +41,14 @@ private:
   KeyBindings  keys;
   float        fps = 0.0f;
 
-  // Camera — spherical coordinates (Z-up)
-  float  camTheta   =  0.785f;   // azimuthal angle (radians, around Z axis)
-  float  camPhi     =  0.615f;   // elevation angle (radians, from XY plane)
-  float  camDist    =  3.46f;    // distance from origin  (≈ length of (2,2,2))
-  bool   mouseDown  = false;
-  double lastMouseX = 0.0, lastMouseY = 0.0;
+  // Camera — spherical coordinates (Z-up), orbiting camTarget
+  float     camTheta   =  0.785f;   // azimuthal angle (radians, around Z axis)
+  float     camPhi     =  0.615f;   // elevation angle (radians, from XY plane)
+  float     camDist    =  3.46f;    // distance from camTarget  (≈ length of (2,2,2))
+  glm::vec3 camTarget  = { 0.0f, 0.0f, 0.0f };  // look-at / orbit pivot
+  bool      mouseDown  = false;   // left button: orbit
+  bool      middleDown = false;   // middle button: pan
+  double    lastMouseX = 0.0, lastMouseY = 0.0;
 
   VkInstance               instance;
   VkSurfaceKHR             surface;
@@ -74,12 +76,17 @@ private:
   VkCommandPool                cmdPool;
   std::vector<VkCommandBuffer> cmdBufs;
 
-  VkBuffer       vertBuf, idxBuf;
-  VkDeviceMemory vertMem, idxMem;
+  // AABB buffer for analytic sphere intersection
+  VkBuffer       aabbBuf = VK_NULL_HANDLE;
+  VkDeviceMemory aabbMem = VK_NULL_HANDLE;
 
   std::vector<VkBuffer>       uboBufs;
   std::vector<VkDeviceMemory> uboMems;
   std::vector<void*>          uboMapped;
+
+  std::vector<VkBuffer>       paramsBufs;
+  std::vector<VkDeviceMemory> paramsMems;
+  std::vector<void*>          paramsMapped;
 
   VkDescriptorPool             descPool;
   std::vector<VkDescriptorSet> descSets;
@@ -114,6 +121,7 @@ private:
 
   void initWindow ();
   void setupKeyBindings ();
+  void setupSignalHandlers ();
 
   void createInstance ();
 
@@ -149,8 +157,7 @@ private:
   VkCommandBuffer beginOneTimeCmd ();
   void endOneTimeCmd (VkCommandBuffer cb);
   void copyBuffer (VkBuffer src, VkBuffer dst, VkDeviceSize size);
-  void createVertexBuffer ();
-  void createIndexBuffer ();
+  void createAABBBuffer ();
   void createUniformBuffers ();
 
   VkDeviceAddress getBufferAddress (VkBuffer buf);
