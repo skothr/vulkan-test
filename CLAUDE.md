@@ -7,7 +7,7 @@ architecture, or conventions described here, update the relevant section before 
 - C++ compiled with g++ using Makefile
 - Vulkan for graphics (ray tracing pipeline)
 - GLFW for window management
-- Dear ImGui for UI panels and popups
+- Dear ImGui for UI panels and popups [v1.92.6-docking]
 - GLM for math (vectors, matrices)
 - stb_image_write for PNG output
 - CUDA for compute (future)

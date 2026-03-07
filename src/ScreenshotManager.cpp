@@ -1,8 +1,7 @@
 #include "ScreenshotManager.hpp"
 
 #include <imgui.h>
-#include <backends/imgui_impl_vulkan.h>
-IMGUI_IMPL_API VkDescriptorSet ImGui_ImplVulkan_AddTexture(VkSampler, VkImageView, VkImageLayout);
+#include <imgui_impl_vulkan.h>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb/stb_image_write.h>
@@ -478,7 +477,7 @@ void ScreenshotManager::drawOptionsPopup ()
       float  avail  = ImGui::GetContentRegionAvail().x;
       float  aspect = (float)scExt.height / (float)scExt.width;
       ImVec2 sz     { avail, avail * aspect };
-      ImGui::Image((ImTextureID)(uintptr_t)texId, sz);
+      ImGui::Image((ImTextureID)texId, sz);
     }
     else { ImGui::TextDisabled("(preview unavailable)"); }
   }

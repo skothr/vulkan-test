@@ -130,6 +130,7 @@ void ControlPanel::init (GLFWwindow *win, VkInstance inst, VkPhysicalDevice phys
   ImGui_ImplGlfw_InitForVulkan(win, true);
 
   ImGui_ImplVulkan_InitInfo info {};
+  info.ApiVersion     = VK_API_VERSION_1_2;
   info.Instance       = inst;
   info.PhysicalDevice = physDev;
   info.Device         = dev;
@@ -137,30 +138,12 @@ void ControlPanel::init (GLFWwindow *win, VkInstance inst, VkPhysicalDevice phys
   info.Queue          = queue;
   info.PipelineCache  = VK_NULL_HANDLE;
   info.DescriptorPool = imguiPool;
-  info.Subpass        = 0;
   info.MinImageCount  = minImageCount;
   info.ImageCount     = (uint32_t)scViews.size();
-  info.MSAASamples    = VK_SAMPLE_COUNT_1_BIT;
-  ImGui_ImplVulkan_Init(&info, imguiPass);
-
-  // Upload font textures via a one-time command buffer
-  VkCommandBufferAllocateInfo cbai { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
-  cbai.commandPool        = pool;
-  cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-  cbai.commandBufferCount = 1;
-  VkCommandBuffer cb;
-  vkAllocateCommandBuffers(dev, &cbai, &cb);
-  VkCommandBufferBeginInfo bi { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
-  bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  vkBeginCommandBuffer(cb, &bi);
-  ImGui_ImplVulkan_CreateFontsTexture(cb);
-  vkEndCommandBuffer(cb);
-  VkSubmitInfo si { VK_STRUCTURE_TYPE_SUBMIT_INFO };
-  si.commandBufferCount = 1; si.pCommandBuffers = &cb;
-  vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE);
-  vkQueueWaitIdle(queue);
-  vkFreeCommandBuffers(dev, pool, 1, &cb);
-  ImGui_ImplVulkan_DestroyFontUploadObjects();
+  info.PipelineInfoMain.RenderPass  = imguiPass;
+  info.PipelineInfoMain.Subpass     = 0;
+  info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+  ImGui_ImplVulkan_Init(&info);
 
   inited = true;
 }
@@ -173,7 +156,12 @@ void ControlPanel::onSwapchainRecreate (VkDevice dev, VkFormat scFormat,
   vkDestroyRenderPass(dev, imguiPass, nullptr);
   createRenderPass(dev, scFormat);
   createFramebuffers(dev, scViews, extent);
-  ImGui_ImplVulkan_SetMinImageCount((uint32_t)scViews.size());
+  // Rebuild ImGui's internal pipeline against the new render pass
+  ImGui_ImplVulkan_PipelineInfo pi {};
+  pi.RenderPass  = imguiPass;
+  pi.Subpass     = 0;
+  pi.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+  ImGui_ImplVulkan_CreateMainPipeline(&pi);
 }
 
 void ControlPanel::cleanup (VkDevice dev)
@@ -380,6 +368,224 @@ void ControlPanel::drawRenderingSection ()
   if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Ray-march steps through the 4D\nGaussian blobby AABB.\nMore = sharper surface, higher cost.\nCtrl+click to type a value above 128."); }
 }
 
+// ============================================================
+// ImGui configuration UI
+// ============================================================
+
+void ControlPanel::drawImGuiStyleSection ()
+{
+  if (!ImGui::CollapsingHeader("Style", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
+  ImGuiStyle &s = ImGui::GetStyle();
+
+  // Theme selector
+  static int theme = 0;  // 0=Dark, 1=Light, 2=Classic
+  if (ImGui::Combo("Theme", &theme, "Dark\0Light\0Classic\0"))
+  {
+    switch (theme)
+    {
+      case 0: ImGui::StyleColorsDark();    break;
+      case 1: ImGui::StyleColorsLight();   break;
+      case 2: ImGui::StyleColorsClassic(); break;
+    }
+  }
+  ImGui::Separator();
+
+  // Font
+  ImGui::SliderFloat("Font Scale",      &s.FontScaleMain, 0.5f, 3.0f, "%.2f");
+
+  // Global
+  ImGui::SliderFloat("Alpha",           &s.Alpha,         0.1f, 1.0f, "%.2f");
+  ImGui::SliderFloat("Disabled Alpha",  &s.DisabledAlpha, 0.0f, 1.0f, "%.2f");
+
+  // Windows
+  ImGui::Separator();
+  ImGui::TextDisabled("Windows");
+  ImGui::SliderFloat2("Window Padding",  (float *)&s.WindowPadding, 0.0f, 20.0f, "%.0f");
+  ImGui::SliderFloat ("Window Rounding", &s.WindowRounding,         0.0f, 14.0f, "%.0f");
+  ImGui::SliderFloat ("Window Border",   &s.WindowBorderSize,       0.0f,  2.0f, "%.0f");
+  ImGui::SliderFloat2("Window Min Size", (float *)&s.WindowMinSize, 0.0f, 200.0f, "%.0f");
+  ImGui::SliderFloat2("Window Title Align", (float *)&s.WindowTitleAlign, 0.0f, 1.0f, "%.2f");
+
+  // Child / Popup
+  ImGui::SliderFloat("Child Rounding",   &s.ChildRounding,  0.0f, 14.0f, "%.0f");
+  ImGui::SliderFloat("Child Border",     &s.ChildBorderSize, 0.0f, 2.0f, "%.0f");
+  ImGui::SliderFloat("Popup Rounding",   &s.PopupRounding,  0.0f, 14.0f, "%.0f");
+  ImGui::SliderFloat("Popup Border",     &s.PopupBorderSize, 0.0f, 2.0f, "%.0f");
+
+  // Frame
+  ImGui::Separator();
+  ImGui::TextDisabled("Frames");
+  ImGui::SliderFloat2("Frame Padding",   (float *)&s.FramePadding, 0.0f, 20.0f, "%.0f");
+  ImGui::SliderFloat ("Frame Rounding",  &s.FrameRounding,        0.0f, 14.0f,  "%.0f");
+  ImGui::SliderFloat ("Frame Border",    &s.FrameBorderSize,       0.0f,  2.0f,  "%.0f");
+
+  // Items
+  ImGui::Separator();
+  ImGui::TextDisabled("Items / Spacing");
+  ImGui::SliderFloat2("Item Spacing",       (float *)&s.ItemSpacing,      0.0f, 20.0f, "%.0f");
+  ImGui::SliderFloat2("Item Inner Spacing", (float *)&s.ItemInnerSpacing, 0.0f, 20.0f, "%.0f");
+  ImGui::SliderFloat2("Cell Padding",       (float *)&s.CellPadding,     0.0f, 20.0f, "%.0f");
+  ImGui::SliderFloat2("Touch Extra Padding",(float *)&s.TouchExtraPadding,0.0f, 20.0f, "%.0f");
+  ImGui::SliderFloat ("Indent Spacing",     &s.IndentSpacing,            0.0f, 40.0f,  "%.0f");
+  ImGui::SliderFloat ("Columns Min Spacing",&s.ColumnsMinSpacing,        0.0f, 20.0f,  "%.0f");
+
+  // Scrollbar
+  ImGui::Separator();
+  ImGui::TextDisabled("Scrollbar");
+  ImGui::SliderFloat("Scrollbar Size",     &s.ScrollbarSize,     1.0f, 30.0f, "%.0f");
+  ImGui::SliderFloat("Scrollbar Rounding", &s.ScrollbarRounding, 0.0f, 14.0f, "%.0f");
+  ImGui::SliderFloat("Scrollbar Padding",  &s.ScrollbarPadding,  0.0f, 10.0f, "%.0f");
+
+  // Grab
+  ImGui::Separator();
+  ImGui::TextDisabled("Grab");
+  ImGui::SliderFloat("Grab Min Size", &s.GrabMinSize, 1.0f, 30.0f, "%.0f");
+  ImGui::SliderFloat("Grab Rounding", &s.GrabRounding, 0.0f, 14.0f, "%.0f");
+
+  // Tabs
+  ImGui::Separator();
+  ImGui::TextDisabled("Tabs");
+  ImGui::SliderFloat("Tab Rounding",       &s.TabRounding,       0.0f, 14.0f, "%.0f");
+  ImGui::SliderFloat("Tab Border",         &s.TabBorderSize,     0.0f,  2.0f, "%.0f");
+  ImGui::SliderFloat("Tab Bar Border",     &s.TabBarBorderSize,  0.0f,  2.0f, "%.1f");
+  ImGui::SliderFloat("Tab Bar Overline",   &s.TabBarOverlineSize, 0.0f, 4.0f, "%.1f");
+  ImGui::SliderFloat("Tab Min Width",      &s.TabMinWidthBase,   0.0f, 200.0f, "%.0f");
+  ImGui::SliderFloat("Tab Min Shrink",     &s.TabMinWidthShrink, 0.0f, 100.0f, "%.0f");
+
+  // Misc visuals
+  ImGui::Separator();
+  ImGui::TextDisabled("Misc");
+  ImGui::SliderFloat ("Log Slider Deadzone",   &s.LogSliderDeadzone,      0.0f, 20.0f,  "%.0f");
+  ImGui::SliderFloat ("Image Rounding",        &s.ImageRounding,          0.0f, 14.0f,  "%.0f");
+  ImGui::SliderFloat ("Image Border",          &s.ImageBorderSize,        0.0f,  2.0f,  "%.0f");
+  ImGui::SliderFloat ("Separator Text Border", &s.SeparatorTextBorderSize, 0.0f, 4.0f,  "%.0f");
+  ImGui::SliderFloat2("Button Text Align",     (float *)&s.ButtonTextAlign, 0.0f, 1.0f, "%.2f");
+  ImGui::SliderFloat2("Selectable Text Align", (float *)&s.SelectableTextAlign, 0.0f, 1.0f, "%.2f");
+
+  // Anti-aliasing / Tessellation
+  ImGui::Separator();
+  ImGui::TextDisabled("Rendering");
+  ImGui::Checkbox("Anti-Aliased Lines",       &s.AntiAliasedLines);
+  ImGui::Checkbox("Anti-Aliased Lines (Tex)", &s.AntiAliasedLinesUseTex);
+  ImGui::Checkbox("Anti-Aliased Fill",        &s.AntiAliasedFill);
+  ImGui::SliderFloat("Curve Tess Tol",      &s.CurveTessellationTol,    0.10f, 10.0f, "%.2f");
+  ImGui::SliderFloat("Circle Tess Max Err", &s.CircleTessellationMaxError, 0.10f, 5.0f, "%.2f");
+
+  // Hover delays
+  ImGui::Separator();
+  ImGui::TextDisabled("Hover");
+  ImGui::SliderFloat("Hover Stationary Delay", &s.HoverStationaryDelay, 0.0f, 2.0f, "%.2f");
+  ImGui::SliderFloat("Hover Delay Short",      &s.HoverDelayShort,     0.0f, 2.0f, "%.2f");
+  ImGui::SliderFloat("Hover Delay Normal",     &s.HoverDelayNormal,    0.0f, 2.0f, "%.2f");
+}
+
+void ControlPanel::drawImGuiColorsSection ()
+{
+  if (!ImGui::CollapsingHeader("Colors")) { return; }
+  ImGuiStyle &s = ImGui::GetStyle();
+
+  // Filter
+  static ImGuiTextFilter filter;
+  filter.Draw("Filter##colors", -1.0f);
+  ImGui::Spacing();
+
+  for (int i = 0; i < ImGuiCol_COUNT; i++)
+  {
+    const char *name = ImGui::GetStyleColorName(i);
+    if (!filter.PassFilter(name)) { continue; }
+    ImGui::PushID(i);
+    ImGui::ColorEdit4("##color", (float *)&s.Colors[i],
+                      ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf);
+    ImGui::SameLine(0.0f, 4.0f);
+    ImGui::TextUnformatted(name);
+    ImGui::PopID();
+  }
+}
+
+void ControlPanel::drawImGuiInputSection ()
+{
+  if (!ImGui::CollapsingHeader("Input", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
+  ImGuiIO &io = ImGui::GetIO();
+
+  // Mouse
+  ImGui::TextDisabled("Mouse");
+  ImGui::SliderFloat("Double-Click Time", &io.MouseDoubleClickTime,   0.05f, 1.0f,  "%.2f s");
+  ImGui::SliderFloat("Double-Click Dist", &io.MouseDoubleClickMaxDist, 1.0f, 20.0f, "%.0f px");
+  ImGui::SliderFloat("Drag Threshold",    &io.MouseDragThreshold,      1.0f, 20.0f, "%.0f px");
+  ImGui::Checkbox   ("Software Cursor",   &io.MouseDrawCursor);
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Render a mouse cursor via ImGui\ninstead of the OS cursor."); }
+
+  // Keyboard
+  ImGui::Separator();
+  ImGui::TextDisabled("Keyboard");
+  ImGui::SliderFloat("Key Repeat Delay", &io.KeyRepeatDelay, 0.05f, 1.0f,  "%.3f s");
+  ImGui::SliderFloat("Key Repeat Rate",  &io.KeyRepeatRate,  0.01f, 0.5f,  "%.3f s");
+  ImGui::Checkbox("Cursor Blink",            &io.ConfigInputTextCursorBlink);
+  ImGui::Checkbox("Enter Keeps Active",      &io.ConfigInputTextEnterKeepActive);
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Pressing Enter keeps the input\ntext widget active and selected."); }
+  ImGui::Checkbox("Drag Click to Input",     &io.ConfigDragClickToInputText);
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Click-release on a drag widget\nenters text input mode."); }
+  ImGui::Checkbox("Trickle Event Queue",     &io.ConfigInputTrickleEventQueue);
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Spread simultaneous input events\nacross multiple frames."); }
+}
+
+void ControlPanel::drawImGuiBehaviorSection ()
+{
+  if (!ImGui::CollapsingHeader("Behavior", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
+  ImGuiIO &io = ImGui::GetIO();
+  ImGuiStyle &s = ImGui::GetStyle();
+
+  // Window behavior
+  ImGui::TextDisabled("Windows");
+  ImGui::Checkbox("Resize From Edges",       &io.ConfigWindowsResizeFromEdges);
+  ImGui::Checkbox("Move From Title Bar Only",&io.ConfigWindowsMoveFromTitleBarOnly);
+  ImGui::Checkbox("Copy Contents (Ctrl+C)",  &io.ConfigWindowsCopyContentsWithCtrlC);
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Ctrl+C copies the contents of\nthe focused window to clipboard."); }
+  ImGui::Checkbox("Scrollbar Scroll By Page",&io.ConfigScrollbarScrollByPage);
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Click outside scrollbar grab to\nscroll by page instead of jumping."); }
+  ImGui::Checkbox("macOS Behaviors",         &io.ConfigMacOSXBehaviors);
+
+  // Navigation
+  ImGui::Separator();
+  ImGui::TextDisabled("Navigation");
+  ImGui::Checkbox("Nav Swap Gamepad Buttons",   &io.ConfigNavSwapGamepadButtons);
+  ImGui::Checkbox("Nav Move Sets Mouse Pos",    &io.ConfigNavMoveSetMousePos);
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Keyboard/gamepad navigation\nteleports the mouse cursor."); }
+  ImGui::Checkbox("Nav Capture Keyboard",       &io.ConfigNavCaptureKeyboard);
+  ImGui::Checkbox("Nav Esc Clears Focus Item",  &io.ConfigNavEscapeClearFocusItem);
+  ImGui::Checkbox("Nav Esc Clears Focus Window",&io.ConfigNavEscapeClearFocusWindow);
+  ImGui::Checkbox("Nav Cursor Auto Visible",    &io.ConfigNavCursorVisibleAuto);
+  ImGui::Checkbox("Nav Cursor Always Visible",  &io.ConfigNavCursorVisibleAlways);
+
+  // Memory
+  ImGui::Separator();
+  ImGui::TextDisabled("Memory / Performance");
+  ImGui::SliderFloat("Compact Timer", &io.ConfigMemoryCompactTimer, -1.0f, 120.0f, "%.0f s");
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Time before freeing unused transient\nbuffers. -1 = never free."); }
+  ImGui::Checkbox("Font Allow User Scaling", &io.FontAllowUserScaling);
+  if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Allow Ctrl+Wheel to scale\nindividual window text."); }
+
+  // Docking (surface if compiled in)
+  ImGui::Separator();
+  ImGui::TextDisabled("Docking");
+  ImGui::Checkbox("No Split",              &io.ConfigDockingNoSplit);
+  ImGui::Checkbox("No Dock Over",          &io.ConfigDockingNoDockingOver);
+  ImGui::Checkbox("With Shift",            &io.ConfigDockingWithShift);
+  ImGui::Checkbox("Always Tab Bar",        &io.ConfigDockingAlwaysTabBar);
+  ImGui::Checkbox("Transparent Payload",   &io.ConfigDockingTransparentPayload);
+  ImGui::Checkbox("Node Close Button",     &s.DockingNodeHasCloseButton);
+  ImGui::SliderFloat("Separator Size",     &s.DockingSeparatorSize, 1.0f, 10.0f, "%.0f");
+
+  // Debug
+  ImGui::Separator();
+  ImGui::TextDisabled("Debug");
+  ImGui::Checkbox("Error Recovery",              &io.ConfigErrorRecovery);
+  ImGui::Checkbox("Highlight ID Conflicts",      &io.ConfigDebugHighlightIdConflicts);
+  ImGui::Checkbox("Debug Begin Return Once",     &io.ConfigDebugBeginReturnValueOnce);
+  ImGui::Checkbox("Debug Begin Return Loop",     &io.ConfigDebugBeginReturnValueLoop);
+  ImGui::Checkbox("Debug Ignore Focus Loss",     &io.ConfigDebugIgnoreFocusLoss);
+}
+
 void ControlPanel::drawCaptureSection ()
 {
   if (!ImGui::CollapsingHeader("Screenshot", ImGuiTreeNodeFlags_DefaultOpen)) { return; }
@@ -459,11 +665,12 @@ void ControlPanel::draw (const DebugInfo &dbg)
     if (ImGui::BeginTabItem("Scene"))     { activeTab = 0; ImGui::EndTabItem(); }
     if (ImGui::BeginTabItem("Rendering")) { activeTab = 1; ImGui::EndTabItem(); }
     if (ImGui::BeginTabItem("Camera"))    { activeTab = 2; ImGui::EndTabItem(); }
+    if (ImGui::BeginTabItem("UI"))        { activeTab = 3; ImGui::EndTabItem(); }
     ImGui::EndTabBar();
   }
 
   // Scrollable content — fills remaining window height
-  ImGui::BeginChild("##tabContent", ImVec2(0.0f, 0.0f), false);
+  ImGui::BeginChild("##tabContent", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None);
   switch (activeTab)
   {
     case 0:
@@ -476,6 +683,12 @@ void ControlPanel::draw (const DebugInfo &dbg)
       break;
     case 1: drawRenderingSection();                      break;
     case 2: drawCameraSection(); drawAnimationSection(); break;
+    case 3:
+      drawImGuiStyleSection();
+      drawImGuiColorsSection();
+      drawImGuiInputSection();
+      drawImGuiBehaviorSection();
+      break;
   }
   ImGui::EndChild();
 

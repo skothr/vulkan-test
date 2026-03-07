@@ -72,4 +72,8 @@ private:
   void drawCameraSection     ();
   void drawAnimationSection  ();
   void drawCaptureSection    ();
+  void drawImGuiStyleSection    ();
+  void drawImGuiColorsSection   ();
+  void drawImGuiInputSection    ();
+  void drawImGuiBehaviorSection ();
 };

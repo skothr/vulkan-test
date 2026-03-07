@@ -1,12 +1,14 @@
 CXX      = g++
 CXXFLAGS = -std=c++17 -O2
-LDFLAGS  = -lvulkan -lglfw -ldl -lpthread -limgui -lstb
+LDFLAGS  = -lvulkan -lglfw -ldl -lpthread -lstb
 
 TARGET   = vulkan-cube
-SRCS     = src/main.cpp src/Application.cpp src/ControlPanel.cpp src/ScreenshotManager.cpp \
-           lib/imgui-backends/imgui_impl_glfw.cpp \
-           lib/imgui-backends/imgui_impl_vulkan.cpp
-INCLUDES = -Iinclude -I/usr/include/imgui -I/usr/include/imgui/backends
+SRCS     = src/main.cpp src/Application.cpp src/ControlPanel.cpp src/ScreenshotManager.cpp
+IMGUI_SRCS = lib/imgui/imgui.cpp lib/imgui/imgui_demo.cpp lib/imgui/imgui_draw.cpp \
+             lib/imgui/imgui_tables.cpp lib/imgui/imgui_widgets.cpp \
+             lib/imgui/backends/imgui_impl_glfw.cpp \
+             lib/imgui/backends/imgui_impl_vulkan.cpp
+INCLUDES = -Iinclude -Ilib/imgui -Ilib/imgui/backends
 
 SHADER_DIR        = shaders
 SPV_DIR           = shaders/compiled
@@ -44,7 +46,7 @@ $(RCHIT_SHADOW_SPV): $(SHADER_DIR)/shader_shadow.rchit
 $(RINT_SPV): $(SHADER_DIR)/shader.rint
 	glslangValidator -V --target-env vulkan1.2 $< -o $@
 
-$(TARGET): $(SRCS)
+$(TARGET): $(SRCS) $(IMGUI_SRCS)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $^ $(LDFLAGS)
 
 run: all
