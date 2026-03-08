@@ -1,8 +1,5 @@
 {
  "permissions": {
- "deny": [
- "Read(./.git/**)",
- "Read(./build/**)"
- ]
+ "deny": []
  }
 }

@@ -19,7 +19,7 @@ RCHIT_SPV         = $(SPV_DIR)/shader.rchit.spv
 RCHIT_SHADOW_SPV  = $(SPV_DIR)/shader_shadow.rchit.spv
 RINT_SPV          = $(SPV_DIR)/shader.rint.spv
 
-.PHONY: all run clean shaders
+.PHONY: all run clean shaders format format-check
 
 all: shaders $(TARGET)
 
@@ -51,6 +51,12 @@ $(TARGET): $(SRCS) $(IMGUI_SRCS)
 
 run: all
 	./$(TARGET)
+
+format:
+	clang-format -i src/*.cpp include/*.hpp
+
+format-check:
+	clang-format --dry-run -Werror src/*.cpp include/*.hpp
 
 clean:
 	rm -f $(TARGET) $(RGEN_SPV) $(RMISS_SPV) $(RMISS_SHADOW_SPV) $(RCHIT_SPV) $(RCHIT_SHADOW_SPV) $(RINT_SPV)

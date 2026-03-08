@@ -1,0 +1,93 @@
+---
+# .clang-format — matches project C++ style conventions (CLAUDE.md)
+# Run:  clang-format -i src/*.cpp include/*.hpp
+
+Language: Cpp
+Standard: c++17
+ColumnLimit: 140
+
+# ── Indentation ────────────────────────────────────────────────────────────────
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ContinuationIndentWidth: 2
+IndentCaseLabels: false
+NamespaceIndentation: None
+AccessModifierOffset: 0
+
+# ── Braces ─────────────────────────────────────────────────────────────────────
+# Braces on new line for blocks (if/for/while/struct/class/function).
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterCaseLabel: true
+  AfterClass: true
+  AfterControlStatement: Always
+  AfterEnum: false
+  AfterFunction: true
+  AfterNamespace: true
+  AfterStruct: true
+  AfterUnion: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeLambdaBody: false
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+
+# Allow short forms on a single line
+AllowShortBlocksOnASingleLine: Always
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortLoopsOnASingleLine: true
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortLambdasOnASingleLine: All
+AllowShortEnumsOnASingleLine: true
+
+# ── Spaces ─────────────────────────────────────────────────────────────────────
+# No space before parens (function calls, declarations, definitions)
+SpaceBeforeParens: ControlStatements
+
+SpaceAfterCStyleCast: false
+SpaceAfterLogicalNot: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeRangeBasedForLoopColon: true
+SpaceInEmptyParentheses: false
+SpacesInAngles: false
+SpacesInCStyleCastParentheses: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# Spaces inside braces for initializer lists: { x, y }
+Cpp11BracedListStyle: false
+SpacesInContainerLiterals: true
+
+# ── Alignment ──────────────────────────────────────────────────────────────────
+# Align = signs, declarations, and macros across consecutive lines.
+AlignConsecutiveAssignments: Consecutive
+AlignConsecutiveDeclarations: Consecutive
+AlignConsecutiveMacros: Consecutive
+AlignEscapedNewlines: Left
+AlignOperands: AlignAfterOperator
+AlignTrailingComments: true
+
+# ── Line breaking ──────────────────────────────────────────────────────────────
+AlwaysBreakTemplateDeclarations: Yes
+BinPackArguments: true
+BinPackParameters: true
+BreakBeforeBinaryOperators: None
+BreakBeforeTernaryOperators: true
+BreakConstructorInitializers: BeforeComma
+BreakStringLiterals: true
+
+# ── Includes ───────────────────────────────────────────────────────────────────
+SortIncludes: false
+IncludeBlocks: Preserve
+
+# ── Other ──────────────────────────────────────────────────────────────────────
+PointerAlignment: Right
+DerivePointerAlignment: false
+ReflowComments: false
+FixNamespaceComments: true
+MaxEmptyLinesToKeep: 2
+...

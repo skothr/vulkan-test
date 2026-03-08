@@ -1,0 +1,4 @@
+---
+# Disable clang-format for third-party code
+DisableFormat: true
+...

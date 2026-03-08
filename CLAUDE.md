@@ -25,6 +25,8 @@ architecture, or conventions described here, update the relevant section before 
 make          # build the project
 make run      # build and run
 make clean    # clean build artifacts
+make format      # format all C++ sources with clang-format
+make format-check  # check formatting (no changes, exit 1 on violations)
 ```
 
 Shader compilation (SPIR-V):
@@ -65,13 +67,11 @@ supporting types closely tied to one class can be defined alongside it.
   `ImGui_ImplVulkan_AddTexture`) to be pipeline-compatible as `ImTextureID`.
 
 ### C++ Style
-- GNU style spacing. Prefer horizontal space; keep related code on one line when readable.
-  Keep lines under 140 characters; split rather than exceed.
-- Align `=`, parentheses, braces, and arguments across related lines where it aids readability.
-  When aligning across lines, offset for unary operators/signs so the value starts are aligned.
-- Always put spaces around and inside curly braces: `A a { x, y };`
-- Block curly braces go on a new line for `if`, `for`, `while`, `struct`, `class`, etc.,
-  unless the entire statement fits on one line.
+Formatting (spacing, braces, line length, alignment) is enforced by clang-format via
+`.clang-format`. Run `make format` before committing. Remaining conventions not covered
+by the formatter:
+- Prefer horizontal space; keep related code on one line when readable.
+- When aligning across lines, offset for unary operators/signs so the value starts are aligned.
 - Always use curly braces, even for one-liners. Two-liners use braces on the second line only:
   ```cpp
   if (condition)

@@ -19,45 +19,61 @@
 const uint32_t WIDTH = 1280, HEIGHT = 800;
 const int      MAX_FRAMES = 2;
 
-struct Vertex { glm::vec3 pos, color; };
+struct Vertex
+{
+  glm::vec3 pos, color;
+};
 
-struct UBO { glm::mat4 model, view, proj; };
+struct UBO
+{
+  glm::mat4 model, view, proj;
+};
 
-struct QueueFamilies { uint32_t graphics, present; };
+struct QueueFamilies
+{
+  uint32_t graphics, present;
+};
 
 // ============================================================
 
 class Application
 {
-public:
-  void run () { initWindow(); initVulkan(); setupSignalHandlers(); mainLoop(); cleanup(); }
+  public:
+  void run()
+  {
+    initWindow();
+    initVulkan();
+    setupSignalHandlers();
+    mainLoop();
+    cleanup();
+  }
 
-private:
-  GLFWwindow  *window = nullptr;
-  bool         framebufferResized = false;
+  private:
+  GLFWwindow *window             = nullptr;
+  bool        framebufferResized = false;
 
   Settings          settings;
-  ControlPanel      controlPanel { settings };
+  ControlPanel      controlPanel{ settings };
   ScreenshotManager screenshotMgr;
 
-  KeyBindings  keys;
-  float        fps = 0.0f;
+  KeyBindings keys;
+  float       fps = 0.0f;
 
   // Camera — spherical coordinates (Z-up), orbiting camTarget
-  float     camTheta   =  0.785f;   // azimuthal angle (radians, around Z axis)
-  float     camPhi     =  0.615f;   // elevation angle (radians, from XY plane)
-  float     camDist    =  3.46f;    // distance from camTarget  (≈ length of (2,2,2))
-  glm::vec3 camTarget  = { 0.0f, 0.0f, 0.0f };  // look-at / orbit pivot
-  bool      mouseDown  = false;   // left button: orbit
-  bool      middleDown = false;   // middle button: pan
+  float     camTheta   = 0.785f;               // azimuthal angle (radians, around Z axis)
+  float     camPhi     = 0.615f;               // elevation angle (radians, from XY plane)
+  float     camDist    = 3.46f;                // distance from camTarget  (≈ length of (2,2,2))
+  glm::vec3 camTarget  = { 0.0f, 0.0f, 0.0f }; // look-at / orbit pivot
+  bool      mouseDown  = false;                // left button: orbit
+  bool      middleDown = false;                // middle button: pan
   double    lastMouseX = 0.0, lastMouseY = 0.0;
 
-  VkInstance               instance;
-  VkSurfaceKHR             surface;
-  VkPhysicalDevice         physDev = VK_NULL_HANDLE;
-  VkDevice                 dev;
-  VkQueue                  graphicsQ, presentQ;
-  QueueFamilies            qf;
+  VkInstance       instance;
+  VkSurfaceKHR     surface;
+  VkPhysicalDevice physDev = VK_NULL_HANDLE;
+  VkDevice         dev;
+  VkQueue          graphicsQ, presentQ;
+  QueueFamilies    qf;
 
   VkSwapchainKHR           swapchain;
   std::vector<VkImage>     scImages;
@@ -71,9 +87,9 @@ private:
   VkDeviceMemory storageMem  = VK_NULL_HANDLE;
   VkImageView    storageView = VK_NULL_HANDLE;
 
-  VkDescriptorSetLayout    descLayout;
-  VkPipelineLayout         pipeLayout;
-  VkPipeline               pipeline;
+  VkDescriptorSetLayout descLayout;
+  VkPipelineLayout      pipeLayout;
+  VkPipeline            pipeline;
 
   VkCommandPool                cmdPool;
   std::vector<VkCommandBuffer> cmdBufs;
@@ -84,31 +100,37 @@ private:
 
   std::vector<VkBuffer>       uboBufs;
   std::vector<VkDeviceMemory> uboMems;
-  std::vector<void*>          uboMapped;
+  std::vector<void *>         uboMapped;
 
   std::vector<VkBuffer>       paramsBufs;
   std::vector<VkDeviceMemory> paramsMems;
-  std::vector<void*>          paramsMapped;
+  std::vector<void *>         paramsMapped;
 
   VkDescriptorPool             descPool;
   std::vector<VkDescriptorSet> descSets;
 
   std::vector<VkSemaphore> imgAvail, renderDone;
   std::vector<VkFence>     inFlight;
-  uint32_t frame = 0;
+  uint32_t                 frame = 0;
 
   // Acceleration structures
   VkAccelerationStructureKHR blas = VK_NULL_HANDLE;
-  VkBuffer       blasBuf; VkDeviceMemory blasMem;
+  VkBuffer                   blasBuf;
+  VkDeviceMemory             blasMem;
 
   VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
-  VkBuffer       tlasBuf; VkDeviceMemory tlasMem;
-  VkBuffer       instanceBuf; VkDeviceMemory instanceMem; void *instanceMapped;
-  VkBuffer       tlasScratchBuf; VkDeviceMemory tlasScratchMem;
+  VkBuffer                   tlasBuf;
+  VkDeviceMemory             tlasMem;
+  VkBuffer                   instanceBuf;
+  VkDeviceMemory             instanceMem;
+  void                      *instanceMapped;
+  VkBuffer                   tlasScratchBuf;
+  VkDeviceMemory             tlasScratchMem;
 
   // Shader binding table
-  VkBuffer       sbtBuf; VkDeviceMemory sbtMem;
-  VkStridedDeviceAddressRegionKHR sbtRgen {}, sbtMiss {}, sbtHit {}, sbtCall {};
+  VkBuffer                        sbtBuf;
+  VkDeviceMemory                  sbtMem;
+  VkStridedDeviceAddressRegionKHR sbtRgen{}, sbtMiss{}, sbtHit{}, sbtCall{};
 
   // RT function pointers (loaded at runtime)
   PFN_vkGetBufferDeviceAddressKHR                pfnGetBufferAddress   = nullptr;
@@ -119,71 +141,70 @@ private:
   PFN_vkGetAccelerationStructureDeviceAddressKHR pfnGetASDeviceAddress = nullptr;
   PFN_vkCreateRayTracingPipelinesKHR             pfnCreateRTPipelines  = nullptr;
   PFN_vkGetRayTracingShaderGroupHandlesKHR       pfnGetRTGroupHandles  = nullptr;
-  PFN_vkCmdTraceRaysKHR                         pfnCmdTraceRays       = nullptr;
+  PFN_vkCmdTraceRaysKHR                          pfnCmdTraceRays       = nullptr;
 
-  void initWindow ();
-  void setupKeyBindings ();
-  void setupSignalHandlers ();
+  void initWindow();
+  void setupKeyBindings();
+  void setupSignalHandlers();
 
-  void createInstance ();
+  void createInstance();
 
-  QueueFamilies findQueueFamilies (VkPhysicalDevice pd);
-  bool isDeviceSuitable (VkPhysicalDevice pd);
-  void pickPhysicalDevice ();
+  QueueFamilies findQueueFamilies(VkPhysicalDevice pd);
+  bool          isDeviceSuitable(VkPhysicalDevice pd);
+  void          pickPhysicalDevice();
 
-  void createLogicalDevice ();
-  void loadRTFunctions ();
+  void createLogicalDevice();
+  void loadRTFunctions();
 
-  VkSurfaceFormatKHR chooseSurfaceFormat ();
-  VkPresentModeKHR   choosePresentMode ();
-  VkExtent2D         chooseExtent (const VkSurfaceCapabilitiesKHR &caps);
-  void createSwapchain ();
+  VkSurfaceFormatKHR chooseSurfaceFormat();
+  VkPresentModeKHR   choosePresentMode();
+  VkExtent2D         chooseExtent(const VkSurfaceCapabilitiesKHR &caps);
+  void               createSwapchain();
 
-  VkImageView createImageView (VkImage img, VkFormat fmt, VkImageAspectFlags aspect);
-  void createImageViews ();
+  VkImageView createImageView(VkImage img, VkFormat fmt, VkImageAspectFlags aspect);
+  void        createImageViews();
 
-  uint32_t findMemoryType (uint32_t filter, VkMemoryPropertyFlags flags);
-  void createImage (uint32_t w, uint32_t h, VkFormat fmt, VkImageTiling tiling,
-                    VkImageUsageFlags usage, VkMemoryPropertyFlags memProps,
-                    VkImage &img, VkDeviceMemory &mem);
+  uint32_t findMemoryType(uint32_t filter, VkMemoryPropertyFlags flags);
+  void     createImage(uint32_t w, uint32_t h, VkFormat fmt, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags memProps,
+                       VkImage &img, VkDeviceMemory &mem);
 
-  void createStorageImage ();
+  void createStorageImage();
 
-  void createDescriptorSetLayout ();
+  void createDescriptorSetLayout();
 
-  VkShaderModule createShaderModule (const std::vector<char> &code);
-  void createRTPipeline ();
+  VkShaderModule createShaderModule(const std::vector<char> &code);
+  void           createRTPipeline();
 
-  void createBuffer (VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props,
-                     VkBuffer &buf, VkDeviceMemory &mem, bool deviceAddr = false);
-  VkCommandBuffer beginOneTimeCmd ();
-  void endOneTimeCmd (VkCommandBuffer cb);
-  void copyBuffer (VkBuffer src, VkBuffer dst, VkDeviceSize size);
-  void createAABBBuffer ();
-  void createUniformBuffers ();
+  void            createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props, VkBuffer &buf, VkDeviceMemory &mem,
+                               bool deviceAddr = false);
+  VkCommandBuffer beginOneTimeCmd();
+  void            endOneTimeCmd(VkCommandBuffer cb);
+  void            copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size);
+  void            createAABBBuffer();
+  void            createUniformBuffers();
 
-  VkDeviceAddress getBufferAddress (VkBuffer buf);
-  void createBLAS ();
-  void createTLAS ();
-  void createSBT ();
+  VkDeviceAddress getBufferAddress(VkBuffer buf);
+  void            createBLAS();
+  void            createTLAS();
+  void            createSBT();
 
-  void createDescriptorPool ();
-  void createDescriptorSets ();
-  void updateStorageImageDescriptor ();
+  void createDescriptorPool();
+  void createDescriptorSets();
+  void updateStorageImageDescriptor();
 
-  void createCommandPool ();
-  void createCommandBuffers ();
-  void recordCommandBuffer (VkCommandBuffer cb, uint32_t imgIdx);
+  void createCommandPool();
+  void createCommandBuffers();
+  void recordCommandBuffer(VkCommandBuffer cb, uint32_t imgIdx);
 
-  void createSyncObjects ();
+  void createSyncObjects();
 
-  void cleanupSwapchain ();
-  void recreateSwapchain ();
+  void cleanupSwapchain();
+  void recreateSwapchain();
 
-  void updateUBO (uint32_t fi);
-  void drawFrame ();
+  void updateUBO(uint32_t fi);
+  void drawFrame();
 
-  void initVulkan ();
-  void mainLoop ();
-  void cleanup ();
+  void initVulkan();
+  void mainLoop();
+  void cleanup();
 };
