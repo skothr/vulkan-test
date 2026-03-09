@@ -19,6 +19,18 @@ architecture, or conventions described here, update the relevant section before 
 - `./lib/` — external dependencies
 - `./shaders/` — GLSL ray tracing shaders
 - `./shaders/compiled/` — compiled SPIR-V shaders
+  
+## Shader Architecture
+Five ray tracing stages compiled to SPIR-V:
+| File                    | Stage        | Role                                          |
+|-------------------------|--------------|-----------------------------------------------|
+| `shader.rgen`           | Ray gen      | Fires primary camera rays; payload loc 0      |
+| `shader.rmiss`          | Miss [0]     | Floor/sky; fires shadow + caustic rays        |
+| `shader_shadow.rmiss`   | Miss [1]     | Sun-direction check or occlusion passthrough  |
+| `shader.rchit`          | Hit [0]      | Glass BSDF (reflect + refract)                |
+| `shader_shadow.rchit`   | Hit [1]      | Glass shadow/caustic transmittance            |
+| `shader.rint`           | Intersection | Analytic sphere (AABB BLAS, procedural hit)   |
+Descriptor set bindings: 0 = TLAS, 1 = storage image, 2 = UBO, 3 = ParamsUBO.
 
 ## Build Commands
 ```bash
@@ -44,9 +56,8 @@ The Makefile compiles `.cu` files with `nvcc` and `.cpp` files with `g++`, linki
 ### Organization
 Think about where code logically belongs before writing it. Application should stay focused on
 top-level app structure: Vulkan init, the main loop, swapchain management, and wiring things
-together. Cohesive functionality with its own state and behavior — especially anything that
-would otherwise spread many related members and methods across a larger class — should be
-encapsulated in its own class.
+together. Cohesive functionality with state management or potential for reusability should be
+encapsulated in separate classes. Make these general puropose tools where possible.
 
 Each class has its own header and source file named after the class in camelCase. Utility or
 supporting types closely tied to one class can be defined alongside it.
@@ -65,6 +76,9 @@ supporting types closely tied to one class can be defined alongside it.
   creation order.
 - ImGui textures must be allocated from ImGui's own descriptor pool and layout (via
   `ImGui_ImplVulkan_AddTexture`) to be pipeline-compatible as `ImTextureID`.
+- Use C++ templates and compile-time code generation and metaprogramming to optimize run time
+  performance or make generic code.
+- Utilize features of modern C++ standards (c++20+), e.g. concepts and constraints.
 
 ### C++ Style
 Formatting (spacing, braces, line length, alignment) is enforced by clang-format via
@@ -83,17 +97,3 @@ by the formatter:
 - Name functions for what they do, not how: `saveScreenshot()` not `doSaveScreenshot()`.
 - Boolean accessors: use a clear descriptive name, or prefix with `is` if needed for clarity.
 
-
-## Shader Architecture
-Five ray tracing stages compiled to SPIR-V:
-
-| File                    | Stage        | Role                                          |
-|-------------------------|--------------|-----------------------------------------------|
-| `shader.rgen`           | Ray gen      | Fires primary camera rays; payload loc 0      |
-| `shader.rmiss`          | Miss [0]     | Floor/sky; fires shadow + caustic rays        |
-| `shader_shadow.rmiss`   | Miss [1]     | Sun-direction check or occlusion passthrough  |
-| `shader.rchit`          | Hit [0]      | Glass BSDF (reflect + refract)                |
-| `shader_shadow.rchit`   | Hit [1]      | Glass shadow/caustic transmittance            |
-| `shader.rint`           | Intersection | Analytic sphere (AABB BLAS, procedural hit)   |
-
-Descriptor set bindings: 0 = TLAS, 1 = storage image, 2 = UBO, 3 = ParamsUBO.
