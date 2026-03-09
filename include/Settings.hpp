@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SettingsManager.hpp"
 #include <string>
 
 enum class SurfaceType { SPHERE = 0, CUBE = 1, SURFACE_4D = 2 };
@@ -60,8 +61,16 @@ struct ParamsUBO
 
 // ── Settings ───────────────────────────────────────────────────────────────
 // All runtime-editable fields with sensible defaults.
+// Fields are registered in the SettingsManager for auto ImGui rendering.
 struct Settings
 {
+  // Non-copyable / non-movable (registry holds pointers to fields)
+  Settings();
+  Settings(const Settings &)            = delete;
+  Settings(Settings &&)                 = delete;
+  Settings &operator=(const Settings &) = delete;
+  Settings &operator=(Settings &&)      = delete;
+
   // ── Material ──────────────────────────────────────────────────────────────
   float ior        = 1.50f;
   float tintAmount = 0.25f;
@@ -99,16 +108,13 @@ struct Settings
   float       cubeSize     = 0.70f;
 
   // ── 4D Gaussian Blobbies ──────────────────────────────────────────────────
-  // The two blobby centers are placed symmetrically at ±dist/2 from (centerX,centerY,centerZ).
-  // Each blobby has independent mu, sigma (3D), W (4D offset), and sigmaW (4D std dev).
-  // Field equation: f_i(p) = mu_i * exp(-|p-c_i|^2/(2*sigma_i^2) - w_i^2/(2*sigmaW_i^2))
   float blobsCenterX = 0.0f, blobsCenterY = 0.0f, blobsCenterZ = 0.0f;
-  float blobsDist = 1.5f; // center-to-center separation along X
+  float blobsDist = 1.5f;
 
   float blob1W      = 0.0f;
   float blob1Mu     = 1.0f;
-  float blob1Sigma  = 0.55f; // 3D standard deviation
-  float blob1SigmaW = 0.5f;  // W-dimension standard deviation
+  float blob1Sigma  = 0.55f;
+  float blob1SigmaW = 0.5f;
 
   float blob2W      = 0.0f;
   float blob2Mu     = 1.0f;
@@ -125,16 +131,16 @@ struct Settings
   float ambient         = 0.02f;
 
   // Caustics
-  float causticDiskScale   = 1.05f; // 1.0 = tight fit; >1 smooths edges, <1 crops
-  float causticFalloff     = 4.00f; // Gaussian sharpness for point-light miss attenuation
-  float causticBlendRadius = 0.40f; // world-space cell size for blended sampling; 0 = per-pixel white noise
-  float causticDitherAmt   = 0.20f; // per-pixel noise to break up cell-boundary seams (0 = none, 1 = full noise)
+  float causticDiskScale   = 1.05f;
+  float causticFalloff     = 4.00f;
+  float causticBlendRadius = 0.40f;
+  float causticDitherAmt   = 0.20f;
   // Soft shadows
   int   shadowSamples  = 32;
   float shadowSoftness = 0.50f;
 
   // 4D Surface
-  int blobMarchSteps = 128; // ray-march steps through 4D Gaussian AABB
+  int blobMarchSteps = 128;
 
   // ── Floor ─────────────────────────────────────────────────────────────────
   float floorZ      = -1.2f;
@@ -161,103 +167,16 @@ struct Settings
   bool showDemo  = false;
 
   // ── Capture ───────────────────────────────────────────────────────────────
-  std::string screenshotSuffix; // optional suffix appended to screenshot filename
+  std::string screenshotSuffix;
 
   // ── Debug overlay  (0 = off, 1 = fps, 2 = verbose) ───────────────────────
   DebugLevel debugLevel = DebugLevel::FPS;
 
-  ParamsUBO toParamsUBO() const
-  {
-    // Blobby centers derived from shared center + separation along X
-    float b1x = blobsCenterX - blobsDist * 0.5f;
-    float b2x = blobsCenterX + blobsDist * 0.5f;
+  // ── Registry ──────────────────────────────────────────────────────────────
+  cfg::SettingsManager registry;
 
-    return {
-      // Material
-      ior,
-      tintAmount,
-      maxDepth,
-      tintR,
-      tintG,
-      tintB,
-      // Sun
-      sunEnabled ? 1 : 0,
-      (sunShadows && shadowsEnabled) ? 1 : 0,
-      (sunCaustics && causticsEnabled) ? 1 : 0,
-      sunAzimuth,
-      sunElevation,
-      sunIntensity,
-      sunConeHalf,
-      sunDiskExp,
-      sunCoronaExp,
-      sunDiskR,
-      sunDiskG,
-      sunDiskB,
-      sunCoronaR,
-      sunCoronaG,
-      sunCoronaB,
-      // Point light
-      pointEnabled ? 1 : 0,
-      (pointShadows && shadowsEnabled) ? 1 : 0,
-      (pointCaustics && causticsEnabled) ? 1 : 0,
-      pointLightX,
-      pointLightY,
-      pointLightZ,
-      pointLightRadius,
-      pointLightR,
-      pointLightG,
-      pointLightB,
-      pointLightIntensity,
-      // Surface
-      (int)surfaceType,
-      sphereRadius,
-      sphereHeight,
-      cubeSize,
-      // Rendering
-      nCaustics,
-      ambient,
-      floorZ,
-      // Floor
-      floorScale,
-      floorLightR,
-      floorLightG,
-      floorLightB,
-      floorDarkR,
-      floorDarkG,
-      floorDarkB,
-      // Sky
-      skyHorizonR,
-      skyHorizonG,
-      skyHorizonB,
-      skyZenithR,
-      skyZenithG,
-      skyZenithB,
-      // Blobbies
-      b1x,
-      blobsCenterY,
-      blobsCenterZ,
-      blob1W,
-      blob1Mu,
-      blob1Sigma,
-      blob1SigmaW,
-      b2x,
-      blobsCenterY,
-      blobsCenterZ,
-      blob2W,
-      blob2Mu,
-      blob2Sigma,
-      blob2SigmaW,
-      blobbiesThreshold,
-      // Shadows
-      shadowSamples,
-      shadowSoftness,
-      // Caustics
-      causticDiskScale,
-      causticFalloff,
-      causticBlendRadius,
-      causticDitherAmt,
-      // Blobby quality
-      blobMarchSteps,
-    };
-  }
+  ParamsUBO toParamsUBO() const;
+
+  private:
+  void initRegistry();
 };

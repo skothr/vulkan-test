@@ -1,9 +1,9 @@
 CXX      = g++
-CXXFLAGS = -std=c++17 -O2
+CXXFLAGS = -std=c++20 -O2
 LDFLAGS  = -lvulkan -lglfw -ldl -lpthread -lstb
 
 TARGET   = vulkan-cube
-SRCS     = src/main.cpp src/Application.cpp src/ControlPanel.cpp src/ScreenshotManager.cpp
+SRCS     = src/main.cpp src/Application.cpp src/Settings.cpp src/ControlPanel.cpp src/ScreenshotManager.cpp
 IMGUI_SRCS = lib/imgui/imgui.cpp lib/imgui/imgui_demo.cpp lib/imgui/imgui_draw.cpp \
              lib/imgui/imgui_tables.cpp lib/imgui/imgui_widgets.cpp \
              lib/imgui/backends/imgui_impl_glfw.cpp \

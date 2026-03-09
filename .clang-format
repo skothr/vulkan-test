@@ -3,7 +3,7 @@
 # Run:  clang-format -i src/*.cpp include/*.hpp
 
 Language: Cpp
-Standard: c++17
+Standard: c++20
 ColumnLimit: 140
 
 # ── Indentation ────────────────────────────────────────────────────────────────

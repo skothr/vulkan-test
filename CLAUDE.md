@@ -68,6 +68,7 @@ supporting types closely tied to one class can be defined alongside it.
 - `ScreenshotManager` — capture state, preview images, staging buffers, popups
 - `KeyBindings` — key→action map, GLFW dispatch
 - `Settings` — all runtime-editable parameters; `toParamsUBO()` packs them for the shader
+- `cfg::SettingsManager` — generic settings registry with metadata and auto ImGui rendering
 
 ### Design
 - Prefer user-configurable settings over hard-coded values. Use sensible defaults, min/max

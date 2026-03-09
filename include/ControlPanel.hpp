@@ -63,16 +63,6 @@ class ControlPanel
   void createFramebuffers(VkDevice dev, const std::vector<VkImageView> &views, VkExtent2D extent);
   void destroyFramebuffers(VkDevice dev);
 
-  void drawSurfaceSection();
-  void drawMaterialSection();
-  void drawSunSection();
-  void drawPointLightSection();
-  void drawFloorSection();
-  void drawSkySection();
-  void drawRenderingSection();
-  void drawCameraSection();
-  void drawAnimationSection();
-  void drawCaptureSection();
   void drawImGuiStyleSection();
   void drawImGuiColorsSection();
   void drawImGuiInputSection();
