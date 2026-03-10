@@ -1,7 +1,7 @@
 # CLAUDE.md
 
-Keep this file up to date. When making changes that affect the stack, structure, build process,
-architecture, or conventions described here, update the relevant section before finishing the task.
+Keep CLAUDE.md up to date. When changes have been made that affect the project stack, structure, shader architecture, build process, 
+architecture, conventions, agents, described here, update the relevant section before finishing the task.
 
 ## Stack
 - C++ compiled with g++ using Makefile
@@ -51,6 +51,21 @@ The Makefile compiles `.cu` files with `nvcc` and `.cpp` files with `g++`, linki
 `-lvulkan -lglfw -ldl -lpthread -limgui -lstb`.
 
 
+## Workflow — Proactive Agent Usage
+
+Proactively launch specialized agents — don't wait for the user to ask. Parallelize whenever
+tasks are independent: launch multiple agents concurrently, use background mode for non-blocking
+work like testing, security review. Prefer delegating nontrivial tasks and research to agents
+over doing work inline to keep the main context window clean for high-level decisions and user
+interaction.
+
+- **ui-ux-designer**: Delegate any ImGui UI work (controls, layout, popups, visual feedback).
+- **test-agent**: Launch in background after writing/refactoring significant code.
+- **security-auditor**: Launch in background after adding external input handling, file I/O,
+  memory management, or Vulkan resource lifecycle code.
+- **Plan agent**: Use for complex multi-step features before writing code.
+- After completing code changes, launch test-agent + security-auditor in background as standard.
+
 ## Code Conventions
 
 ### Organization
@@ -59,8 +74,9 @@ top-level app structure: Vulkan init, the main loop, swapchain management, and w
 together. Cohesive functionality with state management or potential for reusability should be
 encapsulated in separate classes. Make these general puropose tools where possible.
 
-Each class has its own header and source file named after the class in camelCase. Utility or
-supporting types closely tied to one class can be defined alongside it.
+Each class has its own header and source file with the same base name as the class but in camelCase
+(e.g. `class ControlPanel` → `inc/*/controlPanel.hpp` and `src/*/controlPanel.cpp`).
+Utility or supporting types closely tied to one class can be defined alongside it.
 
 **Classes in this codebase:**
 - `Application` — top-level Vulkan setup, main loop, swapchain, ray tracing pipeline
@@ -97,4 +113,10 @@ by the formatter:
 - Short variable names are fine where purpose is clear or matches math/physics conventions.
 - Name functions for what they do, not how: `saveScreenshot()` not `doSaveScreenshot()`.
 - Boolean accessors: use a clear descriptive name, or prefix with `is` if needed for clarity.
+
+# CRITICAL INSTRUCTIONS
+- Do not add new dependencies without asking.
+- Never remove files without asking.
+- When in doubt, ask for input instead of taking a guess (especially for critical decisions or aesthic/design choices).
+
 

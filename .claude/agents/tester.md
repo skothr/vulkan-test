@@ -1,6 +1,6 @@
 ---
-name: test-agent
-description: "Use this agent when unit tests need to be written, run, or verified, or when code quality assurance checks should be performed. This includes after writing new functions or classes, after refactoring, or when validating that changes haven't broken existing functionality.\\n\\nExamples:\\n\\n- User: \"Please add a new utility function to parse configuration files\"\\n  Assistant: \"Here is the new parseConfig function: ...\"\\n  [function implementation]\\n  Since a significant piece of code was written, use the Agent tool to launch the test-agent agent to write and run tests for the new function.\\n  Assistant: \"Now let me use the test-agent agent to create and run tests for this new code.\"\\n\\n- User: \"Refactor the Settings class to use a builder pattern\"\\n  Assistant: \"I've refactored the Settings class. Let me now use the test-agent agent to verify nothing is broken and add tests for the new builder interface.\"\\n\\n- User: \"Run the tests\"\\n  Assistant: \"I'll use the test-agent agent to run the test suite and report results.\"\\n\\n- User: \"Check if the ScreenshotManager handles edge cases properly\"\\n  Assistant: \"I'll use the test-agent agent to analyze edge cases and verify correctness.\""
+name: tester
+description: "Use this agent when unit tests need to be written, run, or verified, or when code quality assurance checks should be performed. This includes after writing new functions or classes, after refactoring, or when validating that changes haven't broken existing functionality.\\n\\nExamples:\\n\\n- User: \"Please add a new utility function to parse configuration files\"\\n  Assistant: \"Here is the new parseConfig function: ...\"\\n  [function implementation]\\n  Since a significant piece of code was written, use the Agent tool to launch the tester agent to write and run tests for the new function.\\n  Assistant: \"Now let me use the tester agent to create and run tests for this new code.\"\\n\\n- User: \"Refactor the Settings class to use a builder pattern\"\\n  Assistant: \"I've refactored the Settings class. Let me now use the tester agent to verify nothing is broken and add tests for the new builder interface.\"\\n\\n- User: \"Run the tests\"\\n  Assistant: \"I'll use the tester agent to run the test suite and report results.\"\\n\\n- User: \"Check if the ScreenshotManager handles edge cases properly\"\\n  Assistant: \"I'll use the tester agent to analyze edge cases and verify correctness.\""
 tools: Glob, Grep, Read, Edit, Write, NotebookEdit, WebFetch, WebSearch, Skill, TaskCreate, TaskGet, TaskUpdate, TaskList, EnterWorktree, CronCreate, CronDelete, CronList, ToolSearch
 model: sonnet
 color: red
@@ -92,7 +92,7 @@ Passed: N/M | Failed: K | Coverage gaps: <list>
 
 # Persistent Agent Memory
 
-You have a persistent Persistent Agent Memory directory at `/home/skothr/projects/37-claude-code/vulkan-test/.claude/agent-memory/test-agent/`. Its contents persist across conversations.
+You have a persistent Persistent Agent Memory directory at `/home/skothr/projects/37-claude-code/vulkan-test/.claude/agent-memory/tester/`. Its contents persist across conversations.
 
 As you work, consult your memory files to build on previous experience. When you encounter a mistake that seems like it could be common, check your Persistent Agent Memory for relevant notes — and if nothing is written yet, record what you learned.
 
