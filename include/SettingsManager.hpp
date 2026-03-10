@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cassert>
+#include <cmath>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -90,6 +91,120 @@ struct Color3Entry : FieldBase
       ptr[1] = defaults[1];
       ptr[2] = defaults[2];
     }
+  }
+};
+
+// ── Vec3Entry ─────────────────────────────────────────────────────────────────
+// Three floats rendered as three labelled drag/slider inputs.
+
+struct Vec3Entry : FieldBase
+{
+  float                     *ptr = nullptr;
+  std::array<float, 3>       defaults{};
+  std::array<float, 3>       minVals{};
+  std::array<float, 3>       maxVals{};
+  std::array<std::string, 3> compLabels = { "X", "Y", "Z" };
+  std::string                format     = "%.2f";
+  bool                       horizontal = false;
+
+  void draw() override
+  {
+    if (horizontal)
+    {
+      float avail = ImGui::GetContentRegionAvail().x;
+      float w     = (avail - ImGui::GetStyle().ItemInnerSpacing.x * 2.0f) / 3.0f;
+      ImGui::PushItemWidth(w);
+      for (int i = 0; i < 3; i++)
+      {
+        if (i > 0) { ImGui::SameLine(); }
+        ImGui::DragFloat((compLabels[i] + "##" + key + std::to_string(i)).c_str(), &ptr[i], 0.01f, minVals[i], maxVals[i], format.c_str());
+      }
+      ImGui::PopItemWidth();
+    }
+    else
+    {
+      for (int i = 0; i < 3; i++)
+      {
+        ImGui::SliderFloat((compLabels[i] + "##" + key + std::to_string(i)).c_str(), &ptr[i], minVals[i], maxVals[i], format.c_str());
+      }
+    }
+  }
+  void reset() override
+  {
+    if (ptr)
+    {
+      ptr[0] = defaults[0];
+      ptr[1] = defaults[1];
+      ptr[2] = defaults[2];
+    }
+  }
+};
+
+// ── AngleEntry ────────────────────────────────────────────────────────────────
+// A float angle with a slider, optional degree readout, and an interactive dial popup.
+
+struct AngleEntry : FieldBase
+{
+  float *ptr        = nullptr;
+  float  defaultVal = 0.0f;
+  float  minVal     = -3.14159265f;
+  float  maxVal     = 3.14159265f;
+  bool   showDeg    = true;
+
+  void draw() override
+  {
+    std::string id = label + "##" + key;
+    ImGui::SliderFloat(id.c_str(), ptr, minVal, maxVal, "%.2f rad");
+    if (showDeg)
+    {
+      ImGui::SameLine();
+      ImGui::Text("(%.1f\xc2\xb0)", *ptr * 57.2957795f);
+    }
+    // Dial button
+    ImGui::SameLine();
+    if (ImGui::SmallButton(("O##dial_" + key).c_str())) { ImGui::OpenPopup(("##angleDial_" + key).c_str()); }
+    if (ImGui::BeginPopup(("##angleDial_" + key).c_str()))
+    {
+      const float radius = 55.0f;
+      const float size   = radius * 2.0f + 10.0f;
+      ImVec2      pos    = ImGui::GetCursorScreenPos();
+      ImVec2      center(pos.x + size * 0.5f, pos.y + size * 0.5f);
+      ImDrawList *dl = ImGui::GetWindowDrawList();
+
+      // Invisible button for interaction
+      ImGui::InvisibleButton(("##dialArea_" + key).c_str(), ImVec2(size, size));
+      if (ImGui::IsItemActive())
+      {
+        ImVec2 mp    = ImGui::GetIO().MousePos;
+        float  angle = std::atan2(mp.y - center.y, mp.x - center.x);
+        if (angle < minVal) { angle = minVal; }
+        if (angle > maxVal) { angle = maxVal; }
+        *ptr = angle;
+      }
+
+      // Draw circle
+      dl->AddCircle(center, radius, IM_COL32(180, 180, 180, 255), 64, 2.0f);
+      // Draw arc from 0 to current angle
+      float a = *ptr;
+      if (a != 0.0f)
+      {
+        float startA = (a > 0.0f) ? 0.0f : a;
+        float endA   = (a > 0.0f) ? a : 0.0f;
+        dl->PathArcTo(center, radius * 0.4f, startA, endA, 32);
+        dl->PathStroke(IM_COL32(100, 180, 255, 160), 0, 4.0f);
+      }
+      // Draw line from center to current angle
+      ImVec2 tip(center.x + radius * std::cos(a), center.y + radius * std::sin(a));
+      dl->AddLine(center, tip, IM_COL32(255, 200, 80, 255), 2.0f);
+      // Center dot
+      dl->AddCircleFilled(center, 3.0f, IM_COL32(255, 255, 255, 255));
+
+      ImGui::EndPopup();
+    }
+  }
+  void reset() override
+  {
+    if (ptr) { *ptr = defaultVal; }
   }
 };
 
@@ -238,6 +353,150 @@ class SettingsManager
     std::unique_ptr<Color3Entry> entry_;
   };
 
+  // ── Vec3Builder (fluent vec3-field registration) ─────────────────────────
+
+  class Vec3Builder
+  {
+    public:
+    Vec3Builder(SettingsManager &mgr, std::unique_ptr<Vec3Entry> e)
+        : mgr_(mgr)
+        , entry_(std::move(e))
+    {}
+    ~Vec3Builder()
+    {
+      if (entry_) { mgr_.push(std::move(entry_)); }
+    }
+    Vec3Builder(Vec3Builder &&)            = default;
+    Vec3Builder &operator=(Vec3Builder &&) = default;
+
+    Vec3Builder &label(std::string l)
+    {
+      entry_->label = std::move(l);
+      return *this;
+    }
+    Vec3Builder &group(std::string g)
+    {
+      entry_->group = std::move(g);
+      return *this;
+    }
+    Vec3Builder &tooltip(std::string t)
+    {
+      entry_->tooltip = std::move(t);
+      return *this;
+    }
+    Vec3Builder &format(std::string f)
+    {
+      entry_->format = std::move(f);
+      return *this;
+    }
+    Vec3Builder &sameLine(bool v = true)
+    {
+      entry_->sameLine = v;
+      return *this;
+    }
+    Vec3Builder &horizontal(bool v = true)
+    {
+      entry_->horizontal = v;
+      return *this;
+    }
+    Vec3Builder &range(float lo, float hi)
+    {
+      entry_->minVals = { lo, lo, lo };
+      entry_->maxVals = { hi, hi, hi };
+      return *this;
+    }
+    Vec3Builder &rangeX(float lo, float hi)
+    {
+      entry_->minVals[0] = lo;
+      entry_->maxVals[0] = hi;
+      return *this;
+    }
+    Vec3Builder &rangeY(float lo, float hi)
+    {
+      entry_->minVals[1] = lo;
+      entry_->maxVals[1] = hi;
+      return *this;
+    }
+    Vec3Builder &rangeZ(float lo, float hi)
+    {
+      entry_->minVals[2] = lo;
+      entry_->maxVals[2] = hi;
+      return *this;
+    }
+    Vec3Builder &compLabels(std::string x, std::string y, std::string z)
+    {
+      entry_->compLabels = { std::move(x), std::move(y), std::move(z) };
+      return *this;
+    }
+    Vec3Builder &visibleWhen(std::function<bool()> pred)
+    {
+      entry_->visible = std::move(pred);
+      return *this;
+    }
+
+    private:
+    SettingsManager           &mgr_;
+    std::unique_ptr<Vec3Entry> entry_;
+  };
+
+  // ── AngleBuilder (fluent angle-field registration) ────────────────────────
+
+  class AngleBuilder
+  {
+    public:
+    AngleBuilder(SettingsManager &mgr, std::unique_ptr<AngleEntry> e)
+        : mgr_(mgr)
+        , entry_(std::move(e))
+    {}
+    ~AngleBuilder()
+    {
+      if (entry_) { mgr_.push(std::move(entry_)); }
+    }
+    AngleBuilder(AngleBuilder &&)            = default;
+    AngleBuilder &operator=(AngleBuilder &&) = default;
+
+    AngleBuilder &label(std::string l)
+    {
+      entry_->label = std::move(l);
+      return *this;
+    }
+    AngleBuilder &group(std::string g)
+    {
+      entry_->group = std::move(g);
+      return *this;
+    }
+    AngleBuilder &tooltip(std::string t)
+    {
+      entry_->tooltip = std::move(t);
+      return *this;
+    }
+    AngleBuilder &sameLine(bool v = true)
+    {
+      entry_->sameLine = v;
+      return *this;
+    }
+    AngleBuilder &showDegrees(bool v = true)
+    {
+      entry_->showDeg = v;
+      return *this;
+    }
+    AngleBuilder &range(float lo, float hi)
+    {
+      entry_->minVal = lo;
+      entry_->maxVal = hi;
+      return *this;
+    }
+    AngleBuilder &visibleWhen(std::function<bool()> pred)
+    {
+      entry_->visible = std::move(pred);
+      return *this;
+    }
+
+    private:
+    SettingsManager            &mgr_;
+    std::unique_ptr<AngleEntry> entry_;
+  };
+
   // ── Registration ─────────────────────────────────────────────────────────
 
   // Register a typed setting. Returns a builder for chaining metadata.
@@ -268,6 +527,28 @@ class SettingsManager
     e->ptr      = rgb;
     e->defaults = { r, g, b };
     return Color3Builder(*this, std::move(e));
+  }
+
+  // Register 3 consecutive floats as component drag/slider inputs.
+  Vec3Builder addVec3(std::string key, float *xyz, float dx, float dy, float dz)
+  {
+    auto e      = std::make_unique<Vec3Entry>();
+    e->key      = std::move(key);
+    e->label    = e->key;
+    e->ptr      = xyz;
+    e->defaults = { dx, dy, dz };
+    return Vec3Builder(*this, std::move(e));
+  }
+
+  // Register a float angle with a slider and interactive dial popup.
+  AngleBuilder addAngle(std::string key, float *ptr, float defaultVal)
+  {
+    auto e        = std::make_unique<AngleEntry>();
+    e->key        = std::move(key);
+    e->label      = e->key;
+    e->ptr        = ptr;
+    e->defaultVal = defaultVal;
+    return AngleBuilder(*this, std::move(e));
   }
 
   void addSeparator(std::string group, std::function<bool()> vis = {})

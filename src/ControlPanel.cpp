@@ -489,16 +489,19 @@ void ControlPanel::draw(const DebugInfo &dbg)
   switch (activeTab)
   {
   case 0:
-    reg.drawGroupHeader("Surface");
-    reg.drawGroupHeader("Material");
+    reg.drawGroupHeader("Object");
     reg.drawGroupHeader("Sun");
     reg.drawGroupHeader("Point Light");
-    reg.drawGroupHeader("Floor");
-    reg.drawGroupHeader("Sky");
+    reg.drawGroupHeader("Environment");
     break;
-  case 1: reg.drawGroupHeader("Rendering"); break;
+  case 1:
+    reg.drawGroupHeader("Quality");
+    reg.drawGroupHeader("Caustics");
+    reg.drawGroupHeader("Soft Shadows");
+    reg.drawGroupHeader("4D Surface");
+    break;
   case 2:
-    reg.drawGroupHeader("Camera");
+    reg.drawGroupHeader("View");
     reg.drawGroupHeader("Animation");
     reg.drawGroupHeader("Screenshot");
     break;
