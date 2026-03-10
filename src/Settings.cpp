@@ -190,7 +190,7 @@ void Settings::initRegistry()
 
   // ── View ─────────────────────────────────────────────────────────────────
 
-  registry.add("fov", &fov, 45.0f).label("FOV").group("View").range(10.0f, 120.0f).format("%.1f\xc2\xb0");
+  registry.addAngle("fov", &fov, 45.0f).label("FOV").group("View").range(10.0f, 120.0f).degrees();
   registry.add("sensitivity", &sensitivity, 0.005f).label("Sensitivity").group("View").range(0.001f, 0.02f).format("%.3f");
   registry.add("zoomSpeed", &zoomSpeed, 0.1f).label("Zoom Speed").group("View").range(0.01f, 0.5f);
 

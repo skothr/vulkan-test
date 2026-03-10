@@ -145,20 +145,28 @@ struct Vec3Entry : FieldBase
 
 struct AngleEntry : FieldBase
 {
+  static constexpr float kDeg2Rad = 3.14159265f / 180.0f;
+  static constexpr float kRad2Deg = 180.0f / 3.14159265f;
+
   float *ptr        = nullptr;
   float  defaultVal = 0.0f;
   float  minVal     = -3.14159265f;
   float  maxVal     = 3.14159265f;
   bool   showDeg    = true;
+  bool   inDegrees  = false; // true = value stored in degrees
 
   void draw() override
   {
     std::string id = label + "##" + key;
-    ImGui::SliderFloat(id.c_str(), ptr, minVal, maxVal, "%.2f rad");
-    if (showDeg)
+    if (inDegrees) { ImGui::SliderFloat(id.c_str(), ptr, minVal, maxVal, "%.1f\xc2\xb0"); }
+    else
     {
-      ImGui::SameLine();
-      ImGui::Text("(%.1f\xc2\xb0)", *ptr * 57.2957795f);
+      ImGui::SliderFloat(id.c_str(), ptr, minVal, maxVal, "%.2f rad");
+      if (showDeg)
+      {
+        ImGui::SameLine();
+        ImGui::Text("(%.1f\xc2\xb0)", *ptr * kRad2Deg);
+      }
     }
     // Dial button
     ImGui::SameLine();
@@ -177,6 +185,8 @@ struct AngleEntry : FieldBase
       {
         ImVec2 mp    = ImGui::GetIO().MousePos;
         float  angle = std::atan2(mp.y - center.y, mp.x - center.x);
+        // Convert from dial radians to stored unit
+        if (inDegrees) { angle *= kRad2Deg; }
         if (angle < minVal) { angle = minVal; }
         if (angle > maxVal) { angle = maxVal; }
         *ptr = angle;
@@ -184,17 +194,17 @@ struct AngleEntry : FieldBase
 
       // Draw circle
       dl->AddCircle(center, radius, IM_COL32(180, 180, 180, 255), 64, 2.0f);
-      // Draw arc from 0 to current angle
-      float a = *ptr;
-      if (a != 0.0f)
+      // Draw arc and line in radians for rendering
+      float aRad = inDegrees ? (*ptr * kDeg2Rad) : *ptr;
+      if (aRad != 0.0f)
       {
-        float startA = (a > 0.0f) ? 0.0f : a;
-        float endA   = (a > 0.0f) ? a : 0.0f;
+        float startA = (aRad > 0.0f) ? 0.0f : aRad;
+        float endA   = (aRad > 0.0f) ? aRad : 0.0f;
         dl->PathArcTo(center, radius * 0.4f, startA, endA, 32);
         dl->PathStroke(IM_COL32(100, 180, 255, 160), 0, 4.0f);
       }
       // Draw line from center to current angle
-      ImVec2 tip(center.x + radius * std::cos(a), center.y + radius * std::sin(a));
+      ImVec2 tip(center.x + radius * std::cos(aRad), center.y + radius * std::sin(aRad));
       dl->AddLine(center, tip, IM_COL32(255, 200, 80, 255), 2.0f);
       // Center dot
       dl->AddCircleFilled(center, 3.0f, IM_COL32(255, 255, 255, 255));
@@ -478,6 +488,11 @@ class SettingsManager
     AngleBuilder &showDegrees(bool v = true)
     {
       entry_->showDeg = v;
+      return *this;
+    }
+    AngleBuilder &degrees(bool v = true)
+    {
+      entry_->inDegrees = v;
       return *this;
     }
     AngleBuilder &range(float lo, float hi)
