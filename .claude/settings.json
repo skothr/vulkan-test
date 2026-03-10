@@ -1,5 +1,18 @@
 {
- "permissions": {
- "deny": []
- }
+  "permissions": {
+    "deny": []
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python util/collect-stats.py"
+          }
+        ]
+      }
+    ]
+  }
 }
